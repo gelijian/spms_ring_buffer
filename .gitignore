@@ -1,0 +1,21 @@
+# Build directories
+build/
+cmake-build-*/
+out/
+
+# Compiled files
+*.o
+*.a
+*.so
+*.dylib
+*.exe
+
+# IDE
+.idea/
+*.iml
+.vscode/
+CMakeLists.txt.user
+
+# Shared memory (runtime created)
+/dev/shm/*
+*.lock
