@@ -75,20 +75,20 @@ class Publisher {
  public:
   explicit Publisher(const std::string& shm_name, uint64_t capacity = 0)
       : shm_(shm_name, SharedMemory::Mode::ReadWrite, SpmsRingBufferControlBlock::ComputeRequiredSize(capacity)),
-        cb_(static_cast<SpmsRingBufferControlBlock*>(shm_.GetBaseAddr())),
+        control_block_(static_cast<SpmsRingBufferControlBlock*>(shm_.GetBaseAddr())),
         data_start_(static_cast<char*>(shm_.GetBaseAddr()) + sizeof(SpmsRingBufferControlBlock)),
         lock_(shm_name + ".lock") {
     if (shm_.IsCreated()) {
-      cb_->magic = kShmMagic;
-      cb_->data_capacity = capacity;
-      cb_->publish_offset.store(0, std::memory_order_release);
+      control_block_->magic = kShmMagic;
+      control_block_->data_capacity = capacity;
+      control_block_->publish_offset.store(0, std::memory_order_release);
     } else {
-      if (cb_->magic != kShmMagic) {
+      if (control_block_->magic != kShmMagic) {
         throw std::runtime_error("Invalid shm magic");
       }
-      if (cb_->data_capacity != capacity) {
+      if (control_block_->data_capacity != capacity) {
         throw std::runtime_error("Capacity mismatch: expected " + std::to_string(capacity) + ", got " +
-                                 std::to_string(cb_->data_capacity));
+                                 std::to_string(control_block_->data_capacity));
       }
     }
 
@@ -105,8 +105,8 @@ class Publisher {
   [[nodiscard]] FrameHeader Publish(std::span<const char> payload) {
     auto payload_len = static_cast<uint32_t>(payload.size());
     auto rounded_payload_len = RoundUp8(payload_len);
-    auto current_offset = cb_->publish_offset.load(std::memory_order_acquire);
-    if (auto remaining_space = cb_->data_capacity - cb_->PhysicalOffset(current_offset);
+    auto current_offset = control_block_->publish_offset.load(std::memory_order_acquire);
+    if (auto remaining_space = control_block_->data_capacity - control_block_->PhysicalOffset(current_offset);
         rounded_payload_len + 2 * sizeof(FrameHeader) > remaining_space) {
       FrameHeader padding_header{};
       padding_header.logical_offset = current_offset;
@@ -132,16 +132,16 @@ class Publisher {
   [[nodiscard]] static uint32_t RoundUp8(uint32_t value) { return (value + 7) & ~7; }
 
   void WriteFrame(const FrameHeader& header, std::span<const char> body) {
-    auto data_ptr = data_start_ + cb_->PhysicalOffset(header.logical_offset);
+    auto data_ptr = data_start_ + control_block_->PhysicalOffset(header.logical_offset);
     memcpy(data_ptr, &header, sizeof(FrameHeader));
     if (!body.empty()) {
       memcpy(data_ptr + sizeof(FrameHeader), body.data(), body.size());
     }
-    cb_->publish_offset.store(header.OffsetEnd(), std::memory_order_release);
+    control_block_->publish_offset.store(header.OffsetEnd(), std::memory_order_release);
   }
 
   SharedMemory shm_;
-  SpmsRingBufferControlBlock* cb_;
+  SpmsRingBufferControlBlock* control_block_;
   char* data_start_;
   FileLock lock_;
 };
@@ -150,12 +150,12 @@ class Subscriber {
  public:
   explicit Subscriber(const std::string& shm_name)
       : shm_(shm_name, SharedMemory::Mode::ReadOnly, 0),
-        cb_(static_cast<SpmsRingBufferControlBlock*>(shm_.GetBaseAddr())),
+        control_block_(static_cast<SpmsRingBufferControlBlock*>(shm_.GetBaseAddr())),
         data_start_(static_cast<char*>(shm_.GetBaseAddr()) + sizeof(SpmsRingBufferControlBlock)) {
-    if (cb_->magic != kShmMagic) {
+    if (control_block_->magic != kShmMagic) {
       throw std::runtime_error("Invalid shm magic");
     }
-    cache_publish_offset_ = cb_->publish_offset.load(std::memory_order_acquire);
+    cache_publish_offset_ = control_block_->publish_offset.load(std::memory_order_acquire);
     subscribe_offset_ = cache_publish_offset_;
   }
 
@@ -173,16 +173,16 @@ class Subscriber {
 
   [[nodiscard]] ReadResult TryRead() {
     if (subscribe_offset_ == cache_publish_offset_) {
-      cache_publish_offset_ = cb_->publish_offset.load(std::memory_order_acquire);
+      cache_publish_offset_ = control_block_->publish_offset.load(std::memory_order_acquire);
     }
     if (subscribe_offset_ == cache_publish_offset_) {
       return {};
     }
-    if (cache_publish_offset_ - subscribe_offset_ > cb_->data_capacity) {
+    if (cache_publish_offset_ - subscribe_offset_ > control_block_->data_capacity) {
       throw OverrunException();
     }
 
-    char* data_ptr = data_start_ + cb_->PhysicalOffset(subscribe_offset_);
+    char* data_ptr = data_start_ + control_block_->PhysicalOffset(subscribe_offset_);
     auto& frame_header = *static_cast<const FrameHeader*>(static_cast<void*>(data_ptr));
     if (frame_header.magic != kFrameHeaderMagic) {
       throw InvalidFrameException();
@@ -198,7 +198,7 @@ class Subscriber {
 
  private:
   SharedMemory shm_;
-  SpmsRingBufferControlBlock* cb_;
+  SpmsRingBufferControlBlock* control_block_;
   char* data_start_;
   uint64_t subscribe_offset_ = 0;
   uint64_t cache_publish_offset_ = 0;
