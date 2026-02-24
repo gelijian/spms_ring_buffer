@@ -38,7 +38,18 @@ class FileLock {
 
   void Lock() {
     struct flock fl{};
-    memset(&fl, 0, sizeof(fl));
+    fl.l_type = F_WRLCK;
+    fl.l_whence = SEEK_SET;
+    fl.l_start = 0;
+    fl.l_len = 0;
+
+    if (fcntl(fd_, F_SETLKW, &fl) < 0) {
+      throw std::runtime_error("Failed to lock file: " + lock_path_ + ", errno=" + std::to_string(errno));
+    }
+  }
+
+  bool TryLock() {
+    struct flock fl{};
     fl.l_type = F_WRLCK;
     fl.l_whence = SEEK_SET;
     fl.l_start = 0;
@@ -46,15 +57,15 @@ class FileLock {
 
     if (fcntl(fd_, F_SETLK, &fl) < 0) {
       if (errno == EACCES || errno == EAGAIN) {
-        throw std::runtime_error("Failed to acquire lock: already held by another process");
+        return false;
       }
       throw std::runtime_error("Failed to lock file: " + lock_path_ + ", errno=" + std::to_string(errno));
     }
+    return true;
   }
 
   void Unlock() {
     struct flock fl{};
-    memset(&fl, 0, sizeof(fl));
     fl.l_type = F_UNLCK;
     fl.l_whence = SEEK_SET;
     fl.l_start = 0;

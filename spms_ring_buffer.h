@@ -28,20 +28,21 @@ struct FrameHeader {
   };
 
   uint64_t logical_offset = 0;
+  uint64_t sequence = 0;
   uint32_t frame_len = 0;
   uint32_t payload_len = 0;
   uint32_t magic = kFrameHeaderMagic;
   Type frame_type = Type::kMessage;
-  std::array<uint8_t, 11> reserved{};
+  std::array<uint8_t, 3> reserved{};
 
   [[nodiscard]] uint32_t TotalFrameLen() const { return sizeof(FrameHeader) + frame_len; }
 
   [[nodiscard]] uint64_t OffsetEnd() const { return logical_offset + TotalFrameLen(); }
 
   friend std::ostream& operator<<(std::ostream& os, const FrameHeader& header) {
-    os << "FrameHeader{logical_offset=" << header.logical_offset << ", frame_len=" << header.frame_len
-       << ", payload_len=" << header.payload_len << ", magic=0x" << std::hex << header.magic << std::dec
-       << ", frame_type=" << (header.frame_type == Type::kMessage ? "kMessage" : "kPadding")
+    os << "FrameHeader{logical_offset=" << header.logical_offset << ", sequence=" << header.sequence
+       << ", frame_len=" << header.frame_len << ", payload_len=" << header.payload_len << ", magic=0x" << std::hex
+       << header.magic << std::dec << ", frame_type=" << (header.frame_type == Type::kMessage ? "kMessage" : "kPadding")
        << ", total_len=" << header.TotalFrameLen() << ", offset_end=" << header.OffsetEnd() << "}";
     return os;
   }
@@ -92,7 +93,9 @@ class Publisher {
   ~Publisher() { lock_.Unlock(); }
 
   Publisher(const Publisher&) = delete;
+  Publisher(Publisher&&) = delete;
   Publisher& operator=(const Publisher&) = delete;
+  Publisher& operator=(Publisher&&) = delete;
 
   [[nodiscard]] FrameHeader Publish(std::span<const char> payload) {
     auto payload_len = static_cast<uint32_t>(payload.size());
@@ -125,12 +128,9 @@ class Publisher {
 
   void WriteFrame(const FrameHeader& header, std::span<const char> body) {
     auto data_ptr = data_start_ + cb_->PhysicalOffset(header.logical_offset);
-    auto& frame_header = *static_cast<FrameHeader*>(static_cast<void*>(data_ptr));
-    frame_header = header;
-
+    memcpy(data_ptr, &header, sizeof(FrameHeader));
     if (!body.empty()) {
-      char* body_ptr = data_ptr + sizeof(FrameHeader);
-      memcpy(body_ptr, body.data(), body.size());
+      memcpy(data_ptr + sizeof(FrameHeader), body.data(), body.size());
     }
     cb_->publish_offset.store(header.OffsetEnd(), std::memory_order_release);
   }
@@ -143,9 +143,10 @@ class Publisher {
 
 class Subscriber {
  public:
-  explicit Subscriber(const std::string& shm_name) : shm_(shm_name, SharedMemory::Mode::ReadOnly, 0),
-                                                      cb_(static_cast<SpmsRingBufferControlBlock*>(shm_.GetBaseAddr())),
-                                                      data_start_(static_cast<char*>(shm_.GetBaseAddr()) + sizeof(SpmsRingBufferControlBlock)) {
+  explicit Subscriber(const std::string& shm_name)
+      : shm_(shm_name, SharedMemory::Mode::ReadOnly, 0),
+        cb_(static_cast<SpmsRingBufferControlBlock*>(shm_.GetBaseAddr())),
+        data_start_(static_cast<char*>(shm_.GetBaseAddr()) + sizeof(SpmsRingBufferControlBlock)) {
     if (cb_->magic != kShmMagic) {
       throw std::runtime_error("Invalid shm magic");
     }
@@ -156,7 +157,9 @@ class Subscriber {
   ~Subscriber() = default;
 
   Subscriber(const Subscriber&) = delete;
+  Subscriber(Subscriber&&) = delete;
   Subscriber& operator=(const Subscriber&) = delete;
+  Subscriber& operator=(Subscriber&&) = delete;
 
   struct ReadResult {
     FrameHeader header;

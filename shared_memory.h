@@ -27,7 +27,11 @@ class SharedMemory {
   void Open(const std::string& name, Mode mode, uint64_t size) {
     Detach();
 
-    name_ = "/dev/shm/" + name;
+    if (!name.empty() && name[0] == '/') {
+      name_ = name;
+    } else {
+      name_ = "/dev/shm/" + name;
+    }
     mode_ = mode;
 
     int open_flags = (mode == Mode::ReadWrite) ? O_RDWR : O_RDONLY;
