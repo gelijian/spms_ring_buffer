@@ -246,57 +246,45 @@ class Publisher {
 
     uint32_t length = static_cast<uint32_t>(payload.size());
     uint32_t rounded_payload_len = (length + 7) & ~7;
-    uint64_t total_frame_size = sizeof(FrameHeader) + rounded_payload_len;
 
     uint64_t current_offset = header->publish_offset.load(std::memory_order_acquire);
     uint64_t remaining_space = data_capacity - (current_offset & (data_capacity - 1));
 
     if (rounded_payload_len + sizeof(FrameHeader) + sizeof(FrameHeader) > remaining_space) {
       uint32_t padding_len = (remaining_space + 7) & ~7;
-      WritePaddingFrame(current_offset, padding_len, data_start, data_capacity);
+      std::span<const char> empty_payload;
+      WriteFrame(current_offset, empty_payload, FrameHeader::Type::kPadding, data_start, header);
       current_offset = header->publish_offset.load(std::memory_order_acquire);
     }
 
-    return WriteMessageFrame(current_offset, payload.data(), length, rounded_payload_len, data_start, data_capacity, header);
+    return WriteFrame(current_offset, payload, FrameHeader::Type::kMessage, data_start, header);
   }
 
  private:
-  void WritePaddingFrame(uint64_t offset, uint32_t padding_len, void* data_start, uint64_t data_capacity) {
+  FrameHeader& WriteFrame(uint64_t offset, std::span<const char> payload, FrameHeader::Type frame_type,
+                          void* data_start, ShmHeader* header) {
+    uint64_t data_capacity = header->data_capacity;
     uint64_t masked_offset = offset & (data_capacity - 1);
     char* data_ptr = static_cast<char*>(data_start) + masked_offset;
 
-    auto* header = static_cast<FrameHeader*>(static_cast<void*>(data_ptr));
-    header->data_offset = offset;
-    header->frame_len = padding_len;
-    header->payload_len = 0;
-    header->magic = kFrameHeaderMagic;
-    header->frame_type = FrameHeader::Type::kPadding;
-    memset(header->reserved.data(), 0, header->reserved.size());
-
-    uint64_t total_written = sizeof(FrameHeader) + padding_len;
-    auto* shm_header = reinterpret_cast<ShmHeader*>(static_cast<char*>(data_start) - sizeof(ShmHeader));
-    uint64_t new_offset = offset + total_written;
-    shm_header->publish_offset.store(new_offset, std::memory_order_release);
-  }
-
-  FrameHeader& WriteMessageFrame(uint64_t offset, const void* payload, uint32_t length, uint32_t frame_len, void* data_start,
-                          uint64_t data_capacity, ShmHeader* header) {
-    uint64_t masked_offset = offset & (data_capacity - 1);
-    char* data_ptr = static_cast<char*>(data_start) + masked_offset;
+    uint32_t frame_len = (static_cast<uint32_t>(payload.size()) + 7) & ~7;
+    uint32_t payload_len = (frame_type == FrameHeader::Type::kPadding) ? 0 : static_cast<uint32_t>(payload.size());
 
     auto* frame_header = static_cast<FrameHeader*>(static_cast<void*>(data_ptr));
     frame_header->data_offset = offset;
     frame_header->frame_len = frame_len;
-    frame_header->payload_len = length;
+    frame_header->payload_len = payload_len;
     frame_header->magic = kFrameHeaderMagic;
-    frame_header->frame_type = FrameHeader::Type::kMessage;
+    frame_type == FrameHeader::Type::kPadding ? frame_header->frame_type = FrameHeader::Type::kPadding
+                                              : frame_header->frame_type = FrameHeader::Type::kMessage;
     memset(frame_header->reserved.data(), 0, frame_header->reserved.size());
 
-    char* payload_ptr = data_ptr + sizeof(FrameHeader);
-    memcpy(payload_ptr, payload, length);
-
-    if (frame_len > length) {
-      memset(payload_ptr + length, 0, frame_len - length);
+    if (frame_type == FrameHeader::Type::kMessage && !payload.empty()) {
+      char* payload_ptr = data_ptr + sizeof(FrameHeader);
+      memcpy(payload_ptr, payload.data(), payload.size());
+      if (frame_len > payload.size()) {
+        memset(payload_ptr + payload.size(), 0, frame_len - payload.size());
+      }
     }
 
     uint64_t total_written = sizeof(FrameHeader) + frame_len;
