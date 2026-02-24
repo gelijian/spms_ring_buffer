@@ -35,6 +35,7 @@ namespace spms_ring_buffer {
 
 constexpr uint32_t kFrameHeaderMagic = 0x42524246; // "BRBF"
 constexpr size_t kCacheLineSize = 64;
+constexpr uint64_t kHugePageSize = 2 * 1024 * 1024;
 
 struct FrameHeader {
   enum class Type : uint8_t {
@@ -57,6 +58,10 @@ struct alignas(kCacheLineSize) SpmsRingBufferControlBlock {
   std::atomic<uint64_t> publish_offset{0}; // Global write cursor
 
   [[nodiscard]] uint64_t MaskOffset(uint64_t logical_offset) const { return logical_offset & (data_capacity - 1); }
+
+  [[nodiscard]] static uint64_t ComputeRequiredSize(uint64_t data_capacity) {
+    return (sizeof(SpmsRingBufferControlBlock) + data_capacity + kHugePageSize - 1) & ~(kHugePageSize - 1);
+  }
 };
 
 struct ReadResult {
@@ -80,14 +85,14 @@ class SharedMemory {
   SharedMemory() = default;
   ~SharedMemory();
 
-  explicit SharedMemory(const std::string& name, Mode mode, uint64_t control_block_size, uint64_t data_capacity);
+  explicit SharedMemory(const std::string& name, Mode mode, uint64_t size);
   
-  void Open(const std::string& name, Mode mode, uint64_t control_block_size, uint64_t data_capacity);
+  void Open(const std::string& name, Mode mode, uint64_t size);
   void Detach();
 
-  [[nodiscard]] void* GetDataStart() const;
   [[nodiscard]] void* GetBaseAddr() const;
   [[nodiscard]] uint64_t GetSize() const;
+  [[nodiscard]] bool IsCreated() const;
 
  private:
   // ...

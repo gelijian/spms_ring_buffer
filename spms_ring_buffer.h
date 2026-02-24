@@ -17,6 +17,7 @@ namespace spms_ring_buffer {
 
 constexpr uint32_t kFrameHeaderMagic = 0x42524246;
 constexpr size_t kCacheLineSize = 64;
+constexpr uint64_t kHugePageSize = 2 * 1024 * 1024;
 
 constexpr uint64_t kShmMagic = 0x53504D5342425253ULL;
 
@@ -43,6 +44,10 @@ struct alignas(kCacheLineSize) SpmsRingBufferControlBlock {
   std::atomic<uint64_t> publish_offset{0};
 
   [[nodiscard]] uint64_t MaskOffset(uint64_t logical_offset) const { return logical_offset & (data_capacity - 1); }
+
+  [[nodiscard]] static uint64_t ComputeRequiredSize(uint64_t data_capacity) {
+    return (sizeof(SpmsRingBufferControlBlock) + data_capacity + kHugePageSize - 1) & ~(kHugePageSize - 1);
+  }
 };
 
 struct ReadResult {
@@ -58,11 +63,23 @@ class OverrunException : public std::runtime_error {
 class Publisher {
  public:
   explicit Publisher(const std::string& shm_name, uint64_t capacity = 0)
-      : shm_(shm_name, Mode::ReadWrite, sizeof(SpmsRingBufferControlBlock), capacity), lock_(shm_name + ".lock") {
+      : shm_(shm_name, Mode::ReadWrite, SpmsRingBufferControlBlock::ComputeRequiredSize(capacity)), lock_(shm_name + ".lock") {
     auto* cb = static_cast<SpmsRingBufferControlBlock*>(shm_.GetBaseAddr());
-    cb->magic = kShmMagic;
-    cb->data_capacity = capacity;
-    cb->publish_offset.store(0, std::memory_order_release);
+
+    if (shm_.IsCreated()) {
+      cb->magic = kShmMagic;
+      cb->data_capacity = capacity;
+      cb->publish_offset.store(0, std::memory_order_release);
+    } else {
+      if (cb->magic != kShmMagic) {
+        throw std::runtime_error("Invalid shm magic");
+      }
+      if (cb->data_capacity != capacity) {
+        throw std::runtime_error("Capacity mismatch: expected " + std::to_string(capacity) + ", got " +
+                                 std::to_string(cb->data_capacity));
+      }
+    }
+
     lock_.Lock();
   }
 
@@ -74,7 +91,7 @@ class Publisher {
   [[nodiscard]] FrameHeader Publish(std::span<const char> payload) {
     SpmsRingBufferControlBlock* cb = static_cast<SpmsRingBufferControlBlock*>(shm_.GetBaseAddr());
     uint64_t data_capacity = cb->data_capacity;
-    void* data_start = shm_.GetDataStart();
+    void* data_start = static_cast<char*>(shm_.GetBaseAddr()) + sizeof(SpmsRingBufferControlBlock);
 
     uint32_t length = static_cast<uint32_t>(payload.size());
     uint32_t rounded_payload_len = RoundUp8(length);
@@ -133,7 +150,7 @@ class Publisher {
 
 class Subscriber {
  public:
-  explicit Subscriber(const std::string& shm_name) : shm_(shm_name, Mode::ReadOnly, sizeof(SpmsRingBufferControlBlock), 0) {
+  explicit Subscriber(const std::string& shm_name) : shm_(shm_name, Mode::ReadOnly, 0) {
     auto* cb = static_cast<SpmsRingBufferControlBlock*>(shm_.GetBaseAddr());
     if (cb->magic != kShmMagic) {
       throw std::runtime_error("Invalid shm magic");
@@ -150,7 +167,7 @@ class Subscriber {
   [[nodiscard]] ReadResult TryRead() {
     SpmsRingBufferControlBlock* cb = static_cast<SpmsRingBufferControlBlock*>(shm_.GetBaseAddr());
     uint64_t data_capacity = cb->data_capacity;
-    void* data_start = shm_.GetDataStart();
+    void* data_start = static_cast<char*>(shm_.GetBaseAddr()) + sizeof(SpmsRingBufferControlBlock);
 
     if (subscribe_offset_ == cache_publish_offset_) {
       cache_publish_offset_ = cb->publish_offset.load(std::memory_order_acquire);
