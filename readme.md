@@ -49,6 +49,8 @@ struct FrameHeader {
   uint32_t magic = kFrameHeaderMagic; 
   Type frame_type = Type::kMessage;
   std::array<uint8_t, 11> reserved; 
+
+  [[nodiscard]] uint32_t TotalFrameLen() const { return sizeof(FrameHeader) + frame_len; }
 };
 static_assert(sizeof(FrameHeader) == 32);
 

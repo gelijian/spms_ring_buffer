@@ -34,6 +34,8 @@ struct FrameHeader {
   uint32_t magic = kFrameHeaderMagic;
   Type frame_type = Type::kMessage;
   std::array<uint8_t, 11> reserved{};
+
+  [[nodiscard]] uint32_t TotalFrameLen() const { return sizeof(FrameHeader) + frame_len; }
 };
 static_assert(sizeof(FrameHeader) == 32);
 #pragma pack(pop)
@@ -91,7 +93,6 @@ class Publisher {
   [[nodiscard]] FrameHeader Publish(std::span<const char> payload) {
     SpmsRingBufferControlBlock* cb = static_cast<SpmsRingBufferControlBlock*>(shm_.GetBaseAddr());
     uint64_t data_capacity = cb->data_capacity;
-    void* data_start = static_cast<char*>(shm_.GetBaseAddr()) + sizeof(SpmsRingBufferControlBlock);
 
     uint32_t length = static_cast<uint32_t>(payload.size());
     uint32_t rounded_payload_len = RoundUp8(length);
@@ -99,46 +100,49 @@ class Publisher {
     uint64_t current_offset = cb->publish_offset.load(std::memory_order_acquire);
     uint64_t remaining_space = data_capacity - cb->MaskOffset(current_offset);
 
-    if (rounded_payload_len + sizeof(FrameHeader) + sizeof(FrameHeader) > remaining_space) {
-      uint32_t padding_len = RoundUp8(remaining_space);
-      std::span<const char> empty_payload;
-      WriteFrame(current_offset, empty_payload, FrameHeader::Type::kPadding, data_start, cb);
+    if (rounded_payload_len + 2 * sizeof(FrameHeader) > remaining_space) {
+      FrameHeader padding_header;
+      padding_header.data_offset = current_offset;
+      padding_header.frame_len = RoundUp8(remaining_space);
+      padding_header.payload_len = 0;
+      padding_header.magic = kFrameHeaderMagic;
+      padding_header.frame_type = FrameHeader::Type::kPadding;
+      WriteFrame(padding_header, {});
       current_offset = cb->publish_offset.load(std::memory_order_acquire);
     }
 
-    return WriteFrame(current_offset, payload, FrameHeader::Type::kMessage, data_start, cb);
+    FrameHeader header;
+    header.data_offset = current_offset;
+    header.frame_len = rounded_payload_len;
+    header.payload_len = length;
+    header.magic = kFrameHeaderMagic;
+    header.frame_type = FrameHeader::Type::kMessage;
+    return WriteFrame(header, payload);
   }
 
  private:
   [[nodiscard]] static uint32_t RoundUp8(uint32_t value) { return (value + 7) & ~7; }
 
-  FrameHeader WriteFrame(uint64_t offset, std::span<const char> payload, FrameHeader::Type frame_type,
-                        void* data_start, SpmsRingBufferControlBlock* cb) {
-    uint64_t data_capacity = cb->data_capacity;
-    uint64_t masked_offset = cb->MaskOffset(offset);
+  FrameHeader WriteFrame(const FrameHeader& header, std::span<const char> body) {
+    SpmsRingBufferControlBlock* cb = static_cast<SpmsRingBufferControlBlock*>(shm_.GetBaseAddr());
+    void* data_start = static_cast<char*>(shm_.GetBaseAddr()) + sizeof(SpmsRingBufferControlBlock);
+
+    uint64_t masked_offset = cb->MaskOffset(header.data_offset);
     char* data_ptr = static_cast<char*>(data_start) + masked_offset;
 
-    uint32_t frame_len = RoundUp8(static_cast<uint32_t>(payload.size()));
-    uint32_t payload_len = (frame_type == FrameHeader::Type::kPadding) ? 0 : static_cast<uint32_t>(payload.size());
-
     auto* frame_header = static_cast<FrameHeader*>(static_cast<void*>(data_ptr));
-    frame_header->data_offset = offset;
-    frame_header->frame_len = frame_len;
-    frame_header->payload_len = payload_len;
-    frame_header->magic = kFrameHeaderMagic;
-    frame_header->frame_type = frame_type;
+    *frame_header = header;
     memset(frame_header->reserved.data(), 0, frame_header->reserved.size());
 
-    if (frame_type == FrameHeader::Type::kMessage && !payload.empty()) {
-      char* payload_ptr = data_ptr + sizeof(FrameHeader);
-      memcpy(payload_ptr, payload.data(), payload.size());
-      if (frame_len > payload.size()) {
-        memset(payload_ptr + payload.size(), 0, frame_len - payload.size());
+    if (!body.empty()) {
+      char* body_ptr = data_ptr + sizeof(FrameHeader);
+      memcpy(body_ptr, body.data(), body.size());
+      if (header.frame_len > body.size()) {
+        memset(body_ptr + body.size(), 0, header.frame_len - body.size());
       }
     }
 
-    uint64_t total_written = sizeof(FrameHeader) + frame_len;
-    uint64_t new_offset = offset + total_written;
+    uint64_t new_offset = header.data_offset + header.TotalFrameLen();
     cb->publish_offset.store(new_offset, std::memory_order_release);
 
     return *frame_header;
@@ -192,14 +196,13 @@ class Subscriber {
       return {};
     }
 
-    uint32_t total_len = sizeof(FrameHeader) + frame_header->frame_len;
-    subscribe_offset_ += total_len;
+    subscribe_offset_ += frame_header->TotalFrameLen();
 
     if (frame_header->frame_type == FrameHeader::Type::kPadding) {
       return {*frame_header, {}};
     }
 
-    char* payload_ptr = data_ptr + sizeof(FrameHeader);
+    char* payload_ptr = data_ptr + frame_header->TotalFrameLen() - frame_header->payload_len;
     return {*frame_header, {payload_ptr, static_cast<size_t>(frame_header->payload_len)}};
   }
 
