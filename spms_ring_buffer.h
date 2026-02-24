@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <ostream>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -38,6 +39,17 @@ struct FrameHeader {
   [[nodiscard]] uint32_t TotalFrameLen() const { return sizeof(FrameHeader) + frame_len; }
 
   [[nodiscard]] uint64_t OffsetEnd() const { return logical_offset + TotalFrameLen(); }
+
+  friend std::ostream& operator<<(std::ostream& os, const FrameHeader& header) {
+    os << "FrameHeader{logical_offset=" << header.logical_offset
+       << ", frame_len=" << header.frame_len
+       << ", payload_len=" << header.payload_len
+       << ", magic=0x" << std::hex << header.magic << std::dec
+       << ", frame_type=" << (header.frame_type == Type::kMessage ? "kMessage" : "kPadding")
+       << ", total_len=" << header.TotalFrameLen()
+       << ", offset_end=" << header.OffsetEnd() << "}";
+    return os;
+  }
 };
 static_assert(sizeof(FrameHeader) == 32);
 #pragma pack(pop)

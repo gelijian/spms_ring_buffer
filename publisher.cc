@@ -30,8 +30,8 @@ int main(int argc, char* argv[]) {
     std::span<const char> payload(message);
     FrameHeader header = publisher.Publish(payload);
 
-    std::cout << "Published: " << message << " | frame_len=" << header.frame_len
-              << ", payload_len=" << header.payload_len << std::endl;
+    std::cout << "Published: " << message << std::endl;
+    std::cout << "  Header: " << header << std::endl;
 
     std::this_thread::sleep_for(std::chrono::seconds(1));
   }

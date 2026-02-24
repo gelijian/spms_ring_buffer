@@ -25,8 +25,8 @@ int main(int argc, char* argv[]) {
 
     if (!result.payload.empty()) {
       std::string message(result.payload.data(), result.payload.size());
-      std::cout << "Received: " << message << " | frame_len=" << result.header.frame_len
-                << ", payload_len=" << result.header.payload_len << std::endl;
+      std::cout << "Received: " << message << std::endl;
+      std::cout << "  Header: " << result.header << std::endl;
     } else {
       std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
