@@ -13,17 +13,17 @@ Implement a high-performance **Single Publisher Multi Subscriber (SPMS)** broadc
 
 ### 1.2 Communication & Concurrency
 *   **IPC:** Support both multi-process (Shared Memory) and multi-thread communication.
-*   **Encapsulation:** The Shared Memory (SHM) module should be independently encapsulated.
-*   **Exclusivity:** Provide a `FileLock` for process-level mutual exclusion to ensure only one Publisher instance writes to the buffer.
+*   **Encapsulation:** The Shared Memory (SHM) module should be independently encapsulated (`shared_memory.h`).
+*   **Exclusivity:** Provide a `FileLock` for process-level mutual exclusion to ensure only one Publisher instance writes to the buffer (`file_lock.h`).
 *   **Semantics:** Support Pub-Sub Fan-out (Broadcast) semantics.
 
 ### 1.3 Frame & Buffer Management
 *   **Variable Length:** Support variable-length frames.
-*   **Wrap-around Handling:** When `(frame_total_len + sizeof(FrameHeader)) > remaining_space`, a **Padding Frame** must be appended to fill the tail, and the actual data frame must be written at the beginning of the buffer.
+*   **Wrap-around Handling:** When `(rounded_payload_len + sizeof(FrameHeader) + sizeof(FrameHeader)) > remaining_space`, a **Padding Frame** must be appended to ensure remaining > sizeof(FrameHeader), and the actual data frame must be written at the beginning of the buffer.
 *   **Alignment:** Data frames should be rounded to 8-byte boundaries (except for padding).
 
 ### 1.4 Robustness & Recovery
-*   **Overrun Handling:** If a subscriber is too slow and its read position is overwritten by the publisher, the API must throw an exception. This must not impact the publisher or other subscribers.
+*   **Overrun Handling:** If a subscriber is too slow and its read position is overwritten by the publisher, the subscriber silently resyncs to the latest publish_offset. This must not impact the publisher or other subscribers.
 *   **Fault Recovery:** 
     *   **Publisher:** Resume from the current `publish_offset` in SHM after a crash.
     *   **Subscriber:** Resume from the latest available `publish_offset` after a crash.
@@ -51,10 +51,17 @@ struct FrameHeader {
 };
 static_assert(sizeof(FrameHeader) == 32);
 
-struct alignas(kCacheLineSize) ShmHeader {
+struct alignas(kCacheLineSize) SpmsRingBufferControlBlock {
   uint64_t magic = 0;
   uint64_t data_capacity = 0; // Must be power of two
   std::atomic<uint64_t> publish_offset{0}; // Global write cursor
+
+  [[nodiscard]] uint64_t MaskOffset(uint64_t logical_offset) const { return logical_offset & (data_capacity - 1); }
+};
+
+struct ReadResult {
+  FrameHeader header;
+  std::span<const char> payload;
 };
 
 } // namespace spms_ring_buffer
@@ -62,7 +69,53 @@ struct alignas(kCacheLineSize) ShmHeader {
 
 ## 3. Class Interfaces
 
-### 3.1 Publisher Interface
+### 3.1 SharedMemory Interface
+```cpp
+namespace spms_ring_buffer {
+
+enum class Mode { ReadWrite, ReadOnly };
+
+class SharedMemory {
+ public:
+  SharedMemory() = default;
+  ~SharedMemory();
+
+  explicit SharedMemory(const std::string& name, Mode mode, uint64_t capacity = 0);
+  
+  void Open(const std::string& name, Mode mode, uint64_t capacity = 0);
+  void Detach();
+
+  [[nodiscard]] void* GetDataStart() const;
+  [[nodiscard]] uint64_t GetCapacity() const;
+  [[nodiscard]] void* GetBaseAddr() const;
+
+ private:
+  // ...
+};
+
+} // namespace spms_ring_buffer
+```
+
+### 3.2 FileLock Interface
+```cpp
+namespace spms_ring_buffer {
+
+class FileLock {
+ public:
+  explicit FileLock(const std::string& lock_path);
+  ~FileLock();
+
+  void Lock();
+  void Unlock();
+
+ private:
+  // ...
+};
+
+} // namespace spms_ring_buffer
+```
+
+### 3.3 Publisher Interface
 ```cpp
 namespace spms_ring_buffer {
 
@@ -76,13 +129,14 @@ class Publisher {
   Publisher& operator=(const Publisher&) = delete;
 
   // Handles wrapping, padding, and Acquire/Release ordering.
-  void Publish(const void* payload, uint32_t length);
+  // Returns FrameHeader for debugging purposes.
+  [[nodiscard]] FrameHeader Publish(std::span<const char> payload);
 };
 
 } // namespace spms_ring_buffer
 ```
 
-### 3.2 Subscriber Interface
+### 3.4 Subscriber Interface
 ```cpp
 namespace spms_ring_buffer {
 
@@ -96,17 +150,15 @@ class Subscriber {
 
   /**
    * Tries to read the next frame.
-   * @return:
-   *   - > 0: Length of the payload successfully read.
-   *   - == 0: No new data available OR a Padding frame was encountered and skipped.
-   * @throws:
-   *   - OverrunException: If the publisher has overwritten the subscriber's position.
-   *   - BufferTooSmallException: If dest_capacity < payload_len.
-   * 
+   * @return: ReadResult containing FrameHeader and payload span.
+   *   - payload.empty(): No new data available OR a Padding frame was encountered.
+   *   - !payload.empty(): Valid message payload.
+   *
    * Note: The subscriber uses cache_publish_offset_ to minimize atomic loads.
-   * It only updates from ShmHeader when subscribe_offset_ == cache_publish_offset_.
+   * It only updates from SpmsRingBufferControlBlock when subscribe_offset_ == cache_publish_offset_.
+   * On overrun, subscriber silently resyncs to latest publish_offset.
    */
-  uint32_t TryRead(void* dest_buffer, uint32_t dest_capacity);
+  [[nodiscard]] ReadResult TryRead();
 
  private:
   uint64_t subscribe_offset_ = 0;
@@ -118,8 +170,10 @@ class Subscriber {
 
 ## 4. Deliverables Requirement
 
-1.  **`spms_broadcast_ring_buffer.h`**: Core implementation.
-2.  **`publisher.cpp` / `subscriber.cpp`**: Demo applications.
-3.  **Error Handling**: Use C++ exceptions. No `std::format`.
-4.  **No Loop Guarantee**: `TryRead` must not contain internal `while` loops for skipping padding; it should process one frame (either Message or Padding) per call.
-5.  **Fault Recovery Test**: Demonstrate killing and restarting the publisher/subscriber without corrupting the ring buffer.
+1.  **`spms_ring_buffer.h`**: Core library (Publisher, Subscriber, FrameHeader, ReadResult).
+2.  **`shared_memory.h`**: Shared memory wrapper (SharedMemory class).
+3.  **`file_lock.h`**: File lock wrapper (FileLock class).
+4.  **`publisher.cc` / `subscriber.cc`**: Demo applications.
+5.  **Error Handling**: Use C++ exceptions. No `std::format`.
+6.  **No Loop Guarantee**: `TryRead` must not contain internal `while` loops for skipping padding; it should process one frame (either Message or Padding) per call.
+7.  **Fault Recovery Test**: Demonstrate killing and restarting the publisher/subscriber without corrupting the ring buffer.
