@@ -80,14 +80,14 @@ class SharedMemory {
   SharedMemory() = default;
   ~SharedMemory();
 
-  explicit SharedMemory(const std::string& name, Mode mode, uint64_t capacity = 0);
+  explicit SharedMemory(const std::string& name, Mode mode, uint64_t control_block_size, uint64_t data_capacity);
   
-  void Open(const std::string& name, Mode mode, uint64_t capacity = 0);
+  void Open(const std::string& name, Mode mode, uint64_t control_block_size, uint64_t data_capacity);
   void Detach();
 
   [[nodiscard]] void* GetDataStart() const;
-  [[nodiscard]] uint64_t GetCapacity() const;
   [[nodiscard]] void* GetBaseAddr() const;
+  [[nodiscard]] uint64_t GetSize() const;
 
  private:
   // ...
