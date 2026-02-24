@@ -21,21 +21,13 @@ int main(int argc, char* argv[]) {
   std::vector<char> buffer(4096);
 
   while (true) {
-    try {
-      uint32_t len =
-          subscriber.TryRead(buffer.data(), static_cast<uint32_t>(buffer.size()));
+    std::span<const char> data = subscriber.TryRead();
 
-      if (len > 0) {
-        std::string message(buffer.data(), len);
-        std::cout << "Received: " << message << std::endl;
-      } else {
-        // No new data or padding frame skipped
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-      }
-    } catch (const OverrunException& e) {
-      std::cerr << "Overrun detected: " << e.what() << std::endl;
-    } catch (const BufferTooSmallException& e) {
-      std::cerr << "Buffer too small: " << e.what() << std::endl;
+    if (!data.empty()) {
+      std::string message(data.data(), data.size());
+      std::cout << "Received: " << message << std::endl;
+    } else {
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
   }
 

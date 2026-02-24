@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <span>
 #include <stdexcept>
 #include <string>
 
@@ -238,19 +239,19 @@ class Publisher {
     uint64_t data_capacity = header->data_capacity;
     void* data_start = shm_.GetDataStart();
 
-    uint32_t frame_len = (length + 7) & ~7;
-    uint64_t total_frame_size = sizeof(FrameHeader) + frame_len;
+    uint32_t rounded_payload_len = (length + 7) & ~7;
+    uint64_t total_frame_size = sizeof(FrameHeader) + rounded_payload_len;
 
     uint64_t current_offset = header->publish_offset.load(std::memory_order_acquire);
     uint64_t remaining_space = data_capacity - (current_offset & (data_capacity - 1));
 
-    if (total_frame_size > remaining_space) {
+    if (rounded_payload_len + sizeof(FrameHeader) + sizeof(FrameHeader) > remaining_space) {
       uint32_t padding_len = (remaining_space + 7) & ~7;
       WritePaddingFrame(current_offset, padding_len, data_start, data_capacity);
       current_offset = header->publish_offset.load(std::memory_order_acquire);
     }
 
-    WriteMessageFrame(current_offset, payload, length, frame_len, data_start, data_capacity, header);
+    WriteMessageFrame(current_offset, payload, length, rounded_payload_len, data_start, data_capacity, header);
   }
 
  private:
@@ -314,7 +315,7 @@ class Subscriber {
   Subscriber(const Subscriber&) = delete;
   Subscriber& operator=(const Subscriber&) = delete;
 
-  uint32_t TryRead(void* dest_buffer, uint32_t dest_capacity) {
+  [[nodiscard]] std::span<const char> TryRead() {
     ShmHeader* header = shm_.GetHeader();
     uint64_t data_capacity = header->data_capacity;
     void* data_start = shm_.GetDataStart();
@@ -324,11 +325,12 @@ class Subscriber {
     }
 
     if (subscribe_offset_ == cache_publish_offset_) {
-      return 0;
+      return {};
     }
 
     if (cache_publish_offset_ - subscribe_offset_ > data_capacity) {
-      throw OverrunException();
+      subscribe_offset_ = cache_publish_offset_;
+      return {};
     }
 
     uint64_t masked_offset = subscribe_offset_ & (data_capacity - 1);
@@ -338,26 +340,18 @@ class Subscriber {
 
     if (frame_header->magic != kFrameHeaderMagic) {
       subscribe_offset_ = cache_publish_offset_;
-      return 0;
+      return {};
     }
-
-    if (frame_header->frame_type == FrameHeader::Type::kPadding) {
-      uint32_t total_len = sizeof(FrameHeader) + frame_header->frame_len;
-      subscribe_offset_ += total_len;
-      return 0;
-    }
-
-    if (dest_capacity < frame_header->payload_len) {
-      throw BufferTooSmallException();
-    }
-
-    char* payload_ptr = data_ptr + sizeof(FrameHeader);
-    memcpy(dest_buffer, payload_ptr, frame_header->payload_len);
 
     uint32_t total_len = sizeof(FrameHeader) + frame_header->frame_len;
     subscribe_offset_ += total_len;
 
-    return frame_header->payload_len;
+    if (frame_header->frame_type == FrameHeader::Type::kPadding) {
+      return {};
+    }
+
+    char* payload_ptr = data_ptr + sizeof(FrameHeader);
+    return {payload_ptr, static_cast<size_t>(frame_header->payload_len)};
   }
 
  private:
