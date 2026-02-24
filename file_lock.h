@@ -44,7 +44,10 @@ class FileLock {
     fl.l_start = 0;
     fl.l_len = 0;
 
-    if (fcntl(fd_, F_SETLKW, &fl) < 0) {
+    if (fcntl(fd_, F_SETLK, &fl) < 0) {
+      if (errno == EACCES || errno == EAGAIN) {
+        throw std::runtime_error("Failed to acquire lock: already held by another process");
+      }
       throw std::runtime_error("Failed to lock file: " + lock_path_ + ", errno=" + std::to_string(errno));
     }
   }
