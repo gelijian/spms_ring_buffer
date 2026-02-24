@@ -80,7 +80,7 @@ class FileLock {
   FileLock& operator=(const FileLock&) = delete;
 
   void Lock() {
-    struct flock fl;
+    struct flock fl{};
     memset(&fl, 0, sizeof(fl));
     fl.l_type = F_WRLCK;
     fl.l_whence = SEEK_SET;
@@ -93,7 +93,7 @@ class FileLock {
   }
 
   void Unlock() {
-    struct flock fl;
+    struct flock fl{};
     memset(&fl, 0, sizeof(fl));
     fl.l_type = F_UNLCK;
     fl.l_whence = SEEK_SET;
@@ -143,7 +143,7 @@ class ShmManager {
       }
     }
 
-    struct stat stat_buf;
+    struct stat stat_buf{};
     if (fstat(fd_, &stat_buf) < 0) {
       close(fd_);
       throw std::runtime_error("Failed to stat file: " + name_ + ", errno=" + std::to_string(errno));
@@ -258,7 +258,7 @@ class Publisher {
     uint64_t masked_offset = offset & (data_capacity - 1);
     char* data_ptr = static_cast<char*>(data_start) + masked_offset;
 
-    FrameHeader* header = static_cast<FrameHeader*>(static_cast<void*>(data_ptr));
+    auto* header = static_cast<FrameHeader*>(static_cast<void*>(data_ptr));
     header->data_offset = offset;
     header->frame_len = padding_len;
     header->payload_len = 0;
@@ -267,7 +267,7 @@ class Publisher {
     memset(header->reserved.data(), 0, header->reserved.size());
 
     uint64_t total_written = sizeof(FrameHeader) + padding_len;
-    ShmHeader* shm_header = reinterpret_cast<ShmHeader*>(static_cast<char*>(data_start) - sizeof(ShmHeader));
+    auto* shm_header = reinterpret_cast<ShmHeader*>(static_cast<char*>(data_start) - sizeof(ShmHeader));
     uint64_t new_offset = offset + total_written;
     shm_header->publish_offset.store(new_offset, std::memory_order_release);
   }
@@ -277,7 +277,7 @@ class Publisher {
     uint64_t masked_offset = offset & (data_capacity - 1);
     char* data_ptr = static_cast<char*>(data_start) + masked_offset;
 
-    FrameHeader* frame_header = static_cast<FrameHeader*>(static_cast<void*>(data_ptr));
+    auto* frame_header = static_cast<FrameHeader*>(static_cast<void*>(data_ptr));
     frame_header->data_offset = offset;
     frame_header->frame_len = frame_len;
     frame_header->payload_len = length;
@@ -334,7 +334,7 @@ class Subscriber {
     uint64_t masked_offset = subscribe_offset_ & (data_capacity - 1);
     char* data_ptr = static_cast<char*>(data_start) + masked_offset;
 
-    FrameHeader* frame_header = static_cast<FrameHeader*>(static_cast<void*>(data_ptr));
+    auto* frame_header = static_cast<FrameHeader*>(static_cast<void*>(data_ptr));
 
     if (frame_header->magic != kFrameHeaderMagic) {
       subscribe_offset_ = cache_publish_offset_;
