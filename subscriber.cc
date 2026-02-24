@@ -7,6 +7,8 @@
 
 using namespace spms_ring_buffer;
 
+using ReadResult = Subscriber::ReadResult;
+
 int main(int argc, char* argv[]) {
   std::string shm_name = "spms_test";
 
@@ -17,8 +19,6 @@ int main(int argc, char* argv[]) {
   std::cout << "Starting Subscriber with shm_name=" << shm_name << std::endl;
 
   Subscriber subscriber(shm_name);
-
-  std::vector<char> buffer(4096);
 
   while (true) {
     ReadResult result = subscriber.TryRead();

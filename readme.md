@@ -68,11 +68,6 @@ struct alignas(kCacheLineSize) SpmsRingBufferControlBlock {
   }
 };
 
-struct ReadResult {
-  FrameHeader header;
-  std::span<const char> payload;
-};
-
 } // namespace spms_ring_buffer
 ```
 
@@ -151,6 +146,11 @@ namespace spms_ring_buffer {
 
 class Subscriber {
  public:
+  struct ReadResult {
+    FrameHeader header;
+    std::span<const char> payload;
+  };
+
   explicit Subscriber(const std::string& shm_name);
   ~Subscriber();
 

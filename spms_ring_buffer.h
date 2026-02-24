@@ -41,13 +41,10 @@ struct FrameHeader {
   [[nodiscard]] uint64_t OffsetEnd() const { return logical_offset + TotalFrameLen(); }
 
   friend std::ostream& operator<<(std::ostream& os, const FrameHeader& header) {
-    os << "FrameHeader{logical_offset=" << header.logical_offset
-       << ", frame_len=" << header.frame_len
-       << ", payload_len=" << header.payload_len
-       << ", magic=0x" << std::hex << header.magic << std::dec
+    os << "FrameHeader{logical_offset=" << header.logical_offset << ", frame_len=" << header.frame_len
+       << ", payload_len=" << header.payload_len << ", magic=0x" << std::hex << header.magic << std::dec
        << ", frame_type=" << (header.frame_type == Type::kMessage ? "kMessage" : "kPadding")
-       << ", total_len=" << header.TotalFrameLen()
-       << ", offset_end=" << header.OffsetEnd() << "}";
+       << ", total_len=" << header.TotalFrameLen() << ", offset_end=" << header.OffsetEnd() << "}";
     return os;
   }
 };
@@ -66,11 +63,6 @@ struct alignas(kCacheLineSize) SpmsRingBufferControlBlock {
   }
 };
 
-struct ReadResult {
-  FrameHeader header;
-  std::span<const char> payload;
-};
-
 class OverrunException : public std::runtime_error {
  public:
   OverrunException() : std::runtime_error("Subscriber read position overrun by publisher") {}
@@ -79,7 +71,8 @@ class OverrunException : public std::runtime_error {
 class Publisher {
  public:
   explicit Publisher(const std::string& shm_name, uint64_t capacity = 0)
-      : shm_(shm_name, Mode::ReadWrite, SpmsRingBufferControlBlock::ComputeRequiredSize(capacity)), lock_(shm_name + ".lock") {
+      : shm_(shm_name, Mode::ReadWrite, SpmsRingBufferControlBlock::ComputeRequiredSize(capacity)),
+        lock_(shm_name + ".lock") {
     auto* cb = static_cast<SpmsRingBufferControlBlock*>(shm_.GetBaseAddr());
 
     if (shm_.IsCreated()) {
@@ -178,6 +171,11 @@ class Subscriber {
 
   Subscriber(const Subscriber&) = delete;
   Subscriber& operator=(const Subscriber&) = delete;
+
+  struct ReadResult {
+    FrameHeader header;
+    std::span<const char> payload;
+  };
 
   [[nodiscard]] ReadResult TryRead() {
     auto* cb = static_cast<SpmsRingBufferControlBlock*>(shm_.GetBaseAddr());
