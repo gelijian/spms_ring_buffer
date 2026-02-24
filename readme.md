@@ -43,7 +43,7 @@ struct FrameHeader {
     kPadding = 2,
   };
 
-  uint64_t data_offset = 0;  // Monotonically increasing offset BEFORE this frame
+  uint64_t logical_offset = 0;  // Monotonically increasing offset BEFORE this frame
   uint32_t frame_len = 0;    // Total len (excl. header) rounded to 8 bytes (except padding)
   uint32_t payload_len = 0;  // Actual data len; <= frame_len
   uint32_t magic = kFrameHeaderMagic; 
@@ -51,6 +51,8 @@ struct FrameHeader {
   std::array<uint8_t, 11> reserved; 
 
   [[nodiscard]] uint32_t TotalFrameLen() const { return sizeof(FrameHeader) + frame_len; }
+
+  [[nodiscard]] uint64_t OffsetEnd() const { return logical_offset + TotalFrameLen(); }
 };
 static_assert(sizeof(FrameHeader) == 32);
 
