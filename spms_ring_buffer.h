@@ -66,6 +66,11 @@ class OverrunException : public std::runtime_error {
   OverrunException() : std::runtime_error("Subscriber read position overrun by publisher") {}
 };
 
+class InvalidFrameException : public std::runtime_error {
+ public:
+  InvalidFrameException() : std::runtime_error("Invalid frame header: magic mismatch (data corruption detected)") {}
+};
+
 class Publisher {
  public:
   explicit Publisher(const std::string& shm_name, uint64_t capacity = 0)
@@ -174,15 +179,13 @@ class Subscriber {
       return {};
     }
     if (cache_publish_offset_ - subscribe_offset_ > cb_->data_capacity) {
-      subscribe_offset_ = cache_publish_offset_;
-      return {};
+      throw OverrunException();
     }
 
     char* data_ptr = data_start_ + cb_->PhysicalOffset(subscribe_offset_);
     auto& frame_header = *static_cast<const FrameHeader*>(static_cast<void*>(data_ptr));
     if (frame_header.magic != kFrameHeaderMagic) {
-      subscribe_offset_ = cache_publish_offset_;
-      return {};
+      throw InvalidFrameException();
     }
 
     subscribe_offset_ += frame_header.TotalFrameLen();
