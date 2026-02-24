@@ -3,7 +3,7 @@
 #include <thread>
 #include <vector>
 
-#include "spms_broadcast_ring_buffer.h"
+#include "spms_ring_buffer.h"
 
 using namespace spms_ring_buffer;
 

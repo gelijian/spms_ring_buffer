@@ -3,7 +3,7 @@
 #include <thread>
 #include <vector>
 
-#include "spms_broadcast_ring_buffer.h"
+#include "spms_ring_buffer.h"
 
 using namespace spms_ring_buffer;
 
@@ -28,7 +28,7 @@ int main(int argc, char* argv[]) {
                           std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
 
     std::span<const char> payload(message);
-    const FrameHeader& header = publisher.Publish(payload);
+    FrameHeader header = publisher.Publish(payload);
 
     std::cout << "Published: " << message << " | frame_len=" << header.frame_len
               << ", payload_len=" << header.payload_len << std::endl;

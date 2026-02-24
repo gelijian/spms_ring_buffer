@@ -2,7 +2,7 @@
 
 ## Overview
 
-C++20 single-publisher multi-subscriber (SPMS) broadcast ring buffer library using shared memory for Linux x86-64. Core implementation in a single header file with demo publisher/subscriber applications.
+C++20 single-publisher multi-subscriber (SPMS) broadcast ring buffer library using shared memory for Linux x86-64. Core implementation in header files with demo publisher/subscriber applications.
 
 ---
 
@@ -46,10 +46,10 @@ rm -rf build cmake-build-release && cmake -B build && cmake --build build
 
 ```bash
 # Format with clang-format (Google style)
-clang-format -i --style=file spms_broadcast_ring_buffer.h publisher.cpp subscriber.cpp
+clang-format -i --style=file spms_ring_buffer.h shared_memory.h file_lock.h publisher.cc subscriber.cc
 
 # Check without modifying
-clang-format --style=file --dry-run spms_broadcast_ring_buffer.h publisher.cpp subscriber.cpp
+clang-format --style=file --dry-run spms_ring_buffer.h shared_memory.h file_lock.h publisher.cc subscriber.cc
 ```
 
 ---
@@ -61,14 +61,14 @@ clang-format --style=file --dry-run spms_broadcast_ring_buffer.h publisher.cpp s
 - **Standard**: C++20 (strictly required)
 - **Style**: Google C++ Coding Style
 - **Column Limit**: 120 characters
-- **Core Library**: Single header (`spms_broadcast_ring_buffer.h`)
+- **Core Library**: Single header (`spms_ring_buffer.h`)
 
 ### Naming Conventions
 
 | Element | Convention | Example |
 |---------|------------|---------|
 | Classes | PascalCase | `Publisher`, `Subscriber` |
-| Structs | PascalCase | `FrameHeader`, `ShmHeader` |
+| Structs | PascalCase | `FrameHeader`, `SpmsRingBufferControlBlock` |
 | Enums | PascalCase | `enum class Type` |
 | Constants | kCamelCase | `kFrameHeaderMagic` |
 | Member variables | snake_case_ | `shm_name_`, `subscribe_offset_` |
@@ -79,7 +79,9 @@ clang-format --style=file --dry-run spms_broadcast_ring_buffer.h publisher.cpp s
 
 Include order: corresponding header, C stdlib, C++ stdlib, project headers.
 ```cpp
-#include "spms_broadcast_ring_buffer.h"
+#include "spms_ring_buffer.h"
+#include "shared_memory.h"
+#include "file_lock.h"
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -117,7 +119,7 @@ class Publisher {
   Publisher(const Publisher&) = delete;
   Publisher& operator=(const Publisher&) = delete;
  private:
-  ShmManager shm_;
+  SharedMemory shm_;
   FileLock lock_;
 };
 ```
@@ -136,13 +138,15 @@ class Publisher {
 
 ```
 .
-├── spms_broadcast_ring_buffer.h   # Core library
-├── publisher.cpp                  # Demo publisher
-├── subscriber.cpp                 # Demo subscriber
-├── CMakeLists.txt                 # Build config
-├── .clang-format                  # Code formatting
-├── spec                           # Technical spec
-└── build/                         # Build output
+├── spms_ring_buffer.h           # Core library
+├── shared_memory.h               # Shared memory wrapper
+├── file_lock.h                   # File lock wrapper
+├── publisher.cc                  # Demo publisher
+├── subscriber.cc                 # Demo subscriber
+├── CMakeLists.txt                # Build config
+├── .clang-format                 # Code formatting
+├── spec                          # Technical spec
+└── build/                        # Build output
 ```
 
 ---
@@ -160,7 +164,7 @@ class Publisher {
 
 ### Adding a Feature
 
-1. Modify `spms_broadcast_ring_buffer.h`
+1. Modify `spms_ring_buffer.h`
 2. Update `spec` if API changes
 3. Test with publisher/subscriber demo
 4. Run `clang-format` before committing
