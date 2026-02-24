@@ -4,8 +4,8 @@ project(spms_broadcast_ring_buffer VERSION 1.0.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-add_executable(publisher publisher.cpp)
+add_executable(publisher publisher.cc)
 target_link_libraries(publisher pthread)
 
-add_executable(subscriber subscriber.cpp)
+add_executable(subscriber subscriber.cc)
 target_link_libraries(subscriber pthread)
