@@ -47,7 +47,7 @@ struct alignas(kCacheLineSize) SpmsRingBufferControlBlock {
   uint64_t data_capacity = 0;
   std::atomic<uint64_t> publish_offset{0};
 
-  [[nodiscard]] uint64_t MaskOffset(uint64_t logical_offset) const { return logical_offset & (data_capacity - 1); }
+  [[nodiscard]] uint64_t PhysicalOffset(uint64_t logical_offset) const { return logical_offset & (data_capacity - 1); }
 
   [[nodiscard]] static uint64_t ComputeRequiredSize(uint64_t data_capacity) {
     return (sizeof(SpmsRingBufferControlBlock) + data_capacity + kHugePageSize - 1) & ~(kHugePageSize - 1);
@@ -100,7 +100,7 @@ class Publisher {
     uint32_t rounded_payload_len = RoundUp8(length);
 
     uint64_t current_offset = cb->publish_offset.load(std::memory_order_acquire);
-    uint64_t remaining_space = data_capacity - cb->MaskOffset(current_offset);
+    uint64_t remaining_space = data_capacity - cb->PhysicalOffset(current_offset);
 
     if (rounded_payload_len + 2 * sizeof(FrameHeader) > remaining_space) {
       FrameHeader padding_header;
@@ -129,7 +129,7 @@ class Publisher {
     auto* cb = static_cast<SpmsRingBufferControlBlock*>(shm_.GetBaseAddr());
     void* data_start = static_cast<char*>(shm_.GetBaseAddr()) + sizeof(SpmsRingBufferControlBlock);
 
-    uint64_t masked_offset = cb->MaskOffset(header.logical_offset);
+    uint64_t masked_offset = cb->PhysicalOffset(header.logical_offset);
     char* data_ptr = static_cast<char*>(data_start) + masked_offset;
 
     auto* frame_header = static_cast<FrameHeader*>(static_cast<void*>(data_ptr));
@@ -139,9 +139,6 @@ class Publisher {
     if (!body.empty()) {
       char* body_ptr = data_ptr + sizeof(FrameHeader);
       memcpy(body_ptr, body.data(), body.size());
-      if (header.frame_len > body.size()) {
-        memset(body_ptr + body.size(), 0, header.frame_len - body.size());
-      }
     }
 
     uint64_t new_offset = header.OffsetEnd();
@@ -188,7 +185,7 @@ class Subscriber {
       return {};
     }
 
-    uint64_t masked_offset = cb->MaskOffset(subscribe_offset_);
+    uint64_t masked_offset = cb->PhysicalOffset(subscribe_offset_);
     char* data_ptr = static_cast<char*>(data_start) + masked_offset;
 
     auto* frame_header = static_cast<FrameHeader*>(static_cast<void*>(data_ptr));
@@ -204,7 +201,7 @@ class Subscriber {
       return {*frame_header, {}};
     }
 
-    char* payload_ptr = data_ptr + frame_header->TotalFrameLen() - frame_header->payload_len;
+    char* payload_ptr = data_ptr + sizeof(FrameHeader);
     return {*frame_header, {payload_ptr, static_cast<size_t>(frame_header->payload_len)}};
   }
 

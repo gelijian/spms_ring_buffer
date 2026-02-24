@@ -61,7 +61,7 @@ struct alignas(kCacheLineSize) SpmsRingBufferControlBlock {
   uint64_t data_capacity = 0; // Must be power of two
   std::atomic<uint64_t> publish_offset{0}; // Global write cursor
 
-  [[nodiscard]] uint64_t MaskOffset(uint64_t logical_offset) const { return logical_offset & (data_capacity - 1); }
+  [[nodiscard]] uint64_t PhysicalOffset(uint64_t logical_offset) const { return logical_offset & (data_capacity - 1); }
 
   [[nodiscard]] static uint64_t ComputeRequiredSize(uint64_t data_capacity) {
     return (sizeof(SpmsRingBufferControlBlock) + data_capacity + kHugePageSize - 1) & ~(kHugePageSize - 1);
