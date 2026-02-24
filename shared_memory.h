@@ -6,22 +6,11 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include <atomic>
 #include <cstring>
 #include <stdexcept>
 #include <string>
 
 namespace spms_ring_buffer {
-
-constexpr uint64_t kShmMagic = 0x53504D5342425253ULL;
-
-struct SpmsRingBufferControlBlock {
-  uint64_t magic = 0;
-  uint64_t data_capacity = 0;
-  std::atomic<uint64_t> publish_offset{0};
-
-  [[nodiscard]] uint64_t MaskOffset(uint64_t logical_offset) const { return logical_offset & (data_capacity - 1); }
-};
 
 enum class Mode { ReadWrite, ReadOnly };
 
@@ -30,23 +19,26 @@ class SharedMemory {
   SharedMemory() = default;
   ~SharedMemory() { Detach(); }
 
-  explicit SharedMemory(const std::string& name, Mode mode, uint64_t capacity = 0) { Open(name, mode, capacity); }
+  explicit SharedMemory(const std::string& name, Mode mode, uint64_t control_block_size, uint64_t data_capacity) {
+    Open(name, mode, control_block_size, data_capacity);
+  }
 
   SharedMemory(const SharedMemory&) = delete;
   SharedMemory& operator=(const SharedMemory&) = delete;
 
-  void Open(const std::string& name, Mode mode, uint64_t capacity = 0) {
+  void Open(const std::string& name, Mode mode, uint64_t control_block_size, uint64_t data_capacity) {
     Detach();
 
     name_ = "/dev/shm/" + name;
     mode_ = mode;
+    control_block_size_ = control_block_size;
 
     int open_flags = (mode == Mode::ReadWrite) ? O_RDWR : O_RDONLY;
     int prot = (mode == Mode::ReadWrite) ? (PROT_READ | PROT_WRITE) : PROT_READ;
 
     fd_ = open(name_.c_str(), open_flags, 0666);
     if (fd_ < 0) {
-      if (errno == ENOENT && mode == Mode::ReadWrite && capacity > 0) {
+      if (errno == ENOENT && mode == Mode::ReadWrite && data_capacity > 0) {
         fd_ = open(name_.c_str(), O_CREAT | O_RDWR, 0666);
         if (fd_ < 0) {
           throw std::runtime_error("Failed to create file: " + name_ + ", errno=" + std::to_string(errno));
@@ -63,7 +55,7 @@ class SharedMemory {
     }
 
     bool is_new = stat_buf.st_size == 0;
-    size_ = is_new ? (sizeof(SpmsRingBufferControlBlock) + capacity) : stat_buf.st_size;
+    size_ = is_new ? (control_block_size + data_capacity) : stat_buf.st_size;
 
     if (is_new) {
       if (ftruncate(fd_, size_) < 0) {
@@ -85,27 +77,10 @@ class SharedMemory {
     }
 
     if (is_new) {
-      if (capacity == 0 || (capacity & (capacity - 1)) != 0) {
-        throw std::runtime_error("Capacity must be a non-zero power of two");
+      if (data_capacity == 0 || (data_capacity & (data_capacity - 1)) != 0) {
+        throw std::runtime_error("Data capacity must be a non-zero power of two");
       }
       memset(addr_, 0, size_);
-      auto* cb = static_cast<SpmsRingBufferControlBlock*>(addr_);
-      cb->magic = kShmMagic;
-      cb->data_capacity = capacity;
-      cb->publish_offset.store(0, std::memory_order_release);
-    } else {
-      auto* cb = static_cast<SpmsRingBufferControlBlock*>(addr_);
-      if (cb->magic != kShmMagic) {
-        munmap(addr_, size_);
-        close(fd_);
-        throw std::runtime_error("Invalid shm magic");
-      }
-      if (mode == Mode::ReadWrite && capacity > 0 && cb->data_capacity != capacity) {
-        munmap(addr_, size_);
-        close(fd_);
-        throw std::runtime_error("Capacity mismatch: expected " + std::to_string(capacity) + ", got " +
-                                 std::to_string(cb->data_capacity));
-      }
     }
   }
 
@@ -121,20 +96,18 @@ class SharedMemory {
   }
 
   [[nodiscard]] void* GetDataStart() const {
-    return static_cast<char*>(addr_) + sizeof(SpmsRingBufferControlBlock);
-  }
-
-  [[nodiscard]] uint64_t GetCapacity() const {
-    auto* cb = static_cast<SpmsRingBufferControlBlock*>(addr_);
-    return cb->data_capacity;
+    return static_cast<char*>(addr_) + control_block_size_;
   }
 
   [[nodiscard]] void* GetBaseAddr() const { return addr_; }
+
+  [[nodiscard]] uint64_t GetSize() const { return size_; }
 
  private:
   void* addr_ = nullptr;
   int fd_ = -1;
   uint64_t size_ = 0;
+  uint64_t control_block_size_ = 0;
   std::string name_;
   Mode mode_ = Mode::ReadWrite;
 };

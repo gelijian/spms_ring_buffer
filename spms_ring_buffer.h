@@ -18,6 +18,8 @@ namespace spms_ring_buffer {
 constexpr uint32_t kFrameHeaderMagic = 0x42524246;
 constexpr size_t kCacheLineSize = 64;
 
+constexpr uint64_t kShmMagic = 0x53504D5342425253ULL;
+
 #pragma pack(push, 1)
 struct FrameHeader {
   enum class Type : uint8_t {
@@ -35,6 +37,14 @@ struct FrameHeader {
 static_assert(sizeof(FrameHeader) == 32);
 #pragma pack(pop)
 
+struct alignas(kCacheLineSize) SpmsRingBufferControlBlock {
+  uint64_t magic = 0;
+  uint64_t data_capacity = 0;
+  std::atomic<uint64_t> publish_offset{0};
+
+  [[nodiscard]] uint64_t MaskOffset(uint64_t logical_offset) const { return logical_offset & (data_capacity - 1); }
+};
+
 struct ReadResult {
   FrameHeader header;
   std::span<const char> payload;
@@ -48,7 +58,11 @@ class OverrunException : public std::runtime_error {
 class Publisher {
  public:
   explicit Publisher(const std::string& shm_name, uint64_t capacity = 0)
-      : shm_(shm_name, Mode::ReadWrite, capacity), lock_(shm_name + ".lock") {
+      : shm_(shm_name, Mode::ReadWrite, sizeof(SpmsRingBufferControlBlock), capacity), lock_(shm_name + ".lock") {
+    auto* cb = static_cast<SpmsRingBufferControlBlock*>(shm_.GetBaseAddr());
+    cb->magic = kShmMagic;
+    cb->data_capacity = capacity;
+    cb->publish_offset.store(0, std::memory_order_release);
     lock_.Lock();
   }
 
@@ -119,8 +133,11 @@ class Publisher {
 
 class Subscriber {
  public:
-  explicit Subscriber(const std::string& shm_name) : shm_(shm_name, Mode::ReadOnly, 0) {
-    SpmsRingBufferControlBlock* cb = static_cast<SpmsRingBufferControlBlock*>(shm_.GetBaseAddr());
+  explicit Subscriber(const std::string& shm_name) : shm_(shm_name, Mode::ReadOnly, sizeof(SpmsRingBufferControlBlock), 0) {
+    auto* cb = static_cast<SpmsRingBufferControlBlock*>(shm_.GetBaseAddr());
+    if (cb->magic != kShmMagic) {
+      throw std::runtime_error("Invalid shm magic");
+    }
     cache_publish_offset_ = cb->publish_offset.load(std::memory_order_acquire);
     subscribe_offset_ = cache_publish_offset_;
   }
