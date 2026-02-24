@@ -150,11 +150,8 @@ namespace spms_ring_buffer {
 
 class Publisher::Batch {
  public:
-  explicit Batch(Publisher& publisher);
-  ~Batch();  // Auto-commits if not already committed
-
-  Batch(const Batch&) = delete;
-  Batch& operator=(const Batch&) = delete;
+  // Batch can only be created via Publisher::CreateBatch()
+  // Constructor is private, Publisher is a friend class
 
   // Add a frame to the batch (does not update publish_offset)
   // Returns FrameHeader for debugging purposes.
@@ -165,6 +162,11 @@ class Publisher::Batch {
 
   // Check if batch has been committed
   [[nodiscard]] bool IsCommitted() const;
+
+ private:
+  friend class Publisher;
+  explicit Batch(Publisher& publisher);
+  ~Batch();  // Auto-commits if not already committed
 };
 
 } // namespace spms_ring_buffer

@@ -111,26 +111,11 @@ class Publisher {
 
   class Batch {
    public:
-    explicit Batch(Publisher& publisher) : publisher_(publisher) {
-      start_offset_ = publisher_.control_block_->publish_offset.load(std::memory_order_acquire);
-      current_offset_ = start_offset_;
-    }
-
-    ~Batch() {
-      if (!committed_) {
-        Commit();
-      }
-    }
-
-    Batch(const Batch&) = delete;
-    Batch& operator=(const Batch&) = delete;
-
     [[nodiscard]] FrameHeader Add(std::span<const char> payload) {
       auto payload_len = static_cast<uint32_t>(payload.size());
       auto rounded_payload_len = RoundUp8(payload_len);
 
-      if (auto remaining_space = publisher_.control_block_->data_capacity -
-                                  publisher_.control_block_->PhysicalOffset(current_offset_);
+      if (auto remaining_space = control_block_->data_capacity - control_block_->PhysicalOffset(current_offset_);
           rounded_payload_len + 2 * sizeof(FrameHeader) > remaining_space) {
         FrameHeader padding_header{};
         padding_header.logical_offset = current_offset_;
@@ -155,7 +140,7 @@ class Publisher {
 
     void Commit() {
       if (!committed_) {
-        publisher_.control_block_->publish_offset.store(current_offset_, std::memory_order_release);
+        control_block_->publish_offset.store(current_offset_, std::memory_order_release);
         committed_ = true;
       }
     }
@@ -163,17 +148,26 @@ class Publisher {
     [[nodiscard]] bool IsCommitted() const { return committed_; }
 
    private:
+    explicit Batch(Publisher& publisher)
+        : control_block_(publisher.control_block_), data_start_(publisher.data_start_) {
+      start_offset_ = control_block_->publish_offset.load(std::memory_order_acquire);
+      current_offset_ = start_offset_;
+    }
+
     [[nodiscard]] static uint32_t RoundUp8(uint32_t value) { return (value + 7) & ~7; }
 
     void WriteFrameInternal(const FrameHeader& header, std::span<const char> body) {
-      auto data_ptr = publisher_.data_start_ + publisher_.control_block_->PhysicalOffset(header.logical_offset);
+      auto data_ptr = data_start_ + control_block_->PhysicalOffset(header.logical_offset);
       memcpy(data_ptr, &header, sizeof(FrameHeader));
       if (!body.empty()) {
         memcpy(data_ptr + sizeof(FrameHeader), body.data(), body.size());
       }
     }
 
-    Publisher& publisher_;
+    friend class Publisher;
+
+    SpmsRingBufferControlBlock* control_block_;
+    char* data_start_;
     uint64_t start_offset_ = 0;
     uint64_t current_offset_ = 0;
     bool committed_ = false;
@@ -182,17 +176,6 @@ class Publisher {
   [[nodiscard]] Batch CreateBatch() { return Batch(*this); }
 
  private:
-  [[nodiscard]] static uint32_t RoundUp8(uint32_t value) { return (value + 7) & ~7; }
-
-  void WriteFrame(const FrameHeader& header, std::span<const char> body) {
-    auto data_ptr = data_start_ + control_block_->PhysicalOffset(header.logical_offset);
-    memcpy(data_ptr, &header, sizeof(FrameHeader));
-    if (!body.empty()) {
-      memcpy(data_ptr + sizeof(FrameHeader), body.data(), body.size());
-    }
-    control_block_->publish_offset.store(header.OffsetEnd(), std::memory_order_release);
-  }
-
   SharedMemory shm_;
   SpmsRingBufferControlBlock* control_block_;
   char* data_start_;
