@@ -9,3 +9,6 @@ target_link_libraries(publisher pthread)
 
 add_executable(subscriber subscriber.cc)
 target_link_libraries(subscriber pthread)
+
+add_executable(profiler profiler.cc)
+target_link_libraries(profiler pthread)
