@@ -71,7 +71,7 @@ class OverrunException : public std::runtime_error {
 class Publisher {
  public:
   explicit Publisher(const std::string& shm_name, uint64_t capacity = 0)
-      : shm_(shm_name, Mode::ReadWrite, SpmsRingBufferControlBlock::ComputeRequiredSize(capacity)),
+      : shm_(shm_name, SharedMemory::Mode::ReadWrite, SpmsRingBufferControlBlock::ComputeRequiredSize(capacity)),
         lock_(shm_name + ".lock") {
     auto* cb = static_cast<SpmsRingBufferControlBlock*>(shm_.GetBaseAddr());
 
@@ -158,7 +158,7 @@ class Publisher {
 
 class Subscriber {
  public:
-  explicit Subscriber(const std::string& shm_name) : shm_(shm_name, Mode::ReadOnly, 0) {
+  explicit Subscriber(const std::string& shm_name) : shm_(shm_name, SharedMemory::Mode::ReadOnly, 0) {
     auto* cb = static_cast<SpmsRingBufferControlBlock*>(shm_.GetBaseAddr());
     if (cb->magic != kShmMagic) {
       throw std::runtime_error("Invalid shm magic");

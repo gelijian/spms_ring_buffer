@@ -12,10 +12,10 @@
 
 namespace spms_ring_buffer {
 
-enum class Mode { ReadWrite, ReadOnly };
-
 class SharedMemory {
  public:
+  enum class Mode { ReadWrite, ReadOnly };
+
   SharedMemory() = default;
   ~SharedMemory() { Detach(); }
 
