@@ -238,7 +238,7 @@ int main(int argc, char* argv[]) {
   std::cout << "Warmup: " << cfg.warmup << "\n";
   std::cout << "Rate: " << (cfg.rate > 0 ? std::to_string(cfg.rate) : "unlimited") << " msg/sec\n\n";
 
-  Publisher publisher(cfg.shm_name, 1024 * 1024);
+  Publisher publisher(cfg.shm_name, 16 * 1024 * 1024);
 
   GlobalStats stats;
   stats.subscriber_stats.resize(cfg.subscriber_count);
