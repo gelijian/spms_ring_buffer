@@ -168,6 +168,11 @@ class Publisher {
 2. Update `spec` if API changes
 3. Test with publisher/subscriber demo
 4. Run `clang-format` before committing
+5. Commit changes immediately after any file modification
+
+### Performance Optimization
+
+- Cache `SpmsRingBufferControlBlock*` and `data_start` pointers as private members in Publisher/Subscriber to avoid repeated `static_cast` in hot paths (Publish/TryRead)
 
 ### Debugging
 
