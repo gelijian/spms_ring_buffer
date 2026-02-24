@@ -45,10 +45,12 @@ struct ReadResult {
   std::span<const char> payload;
 };
 
-struct alignas(kCacheLineSize) ShmHeader {
+struct alignas(kCacheLineSize) SpmsRingBufferControlBlock {
   uint64_t magic = 0;
   uint64_t data_capacity = 0;
   std::atomic<uint64_t> publish_offset{0};
+
+  [[nodiscard]] uint64_t MaskOffset(uint64_t logical_offset) const { return logical_offset & (data_capacity - 1); }
 };
 
 class OverrunException : public std::runtime_error {
@@ -156,7 +158,7 @@ class ShmManager {
     }
 
     bool is_new = stat_buf.st_size == 0;
-    size_ = is_new ? (sizeof(ShmHeader) + capacity) : stat_buf.st_size;
+    size_ = is_new ? (sizeof(SpmsRingBufferControlBlock) + capacity) : stat_buf.st_size;
 
     if (is_new) {
       if (ftruncate(fd_, size_) < 0) {
@@ -182,12 +184,12 @@ class ShmManager {
         throw std::runtime_error("Capacity must be a non-zero power of two");
       }
       memset(addr_, 0, size_);
-      ShmHeader* header = GetHeader();
+      SpmsRingBufferControlBlock* header = GetHeader();
       header->magic = kShmMagic;
       header->data_capacity = capacity;
       header->publish_offset.store(0, std::memory_order_release);
     } else {
-      ShmHeader* header = GetHeader();
+      SpmsRingBufferControlBlock* header = GetHeader();
       if (header->magic != kShmMagic) {
         munmap(addr_, size_);
         close(fd_);
@@ -213,9 +215,9 @@ class ShmManager {
     }
   }
 
-  [[nodiscard]] void* GetDataStart() const { return static_cast<char*>(addr_) + sizeof(ShmHeader); }
+  [[nodiscard]] void* GetDataStart() const { return static_cast<char*>(addr_) + sizeof(SpmsRingBufferControlBlock); }
 
-  [[nodiscard]] ShmHeader* GetHeader() const { return static_cast<ShmHeader*>(addr_); }
+  [[nodiscard]] SpmsRingBufferControlBlock* GetHeader() const { return static_cast<SpmsRingBufferControlBlock*>(addr_); }
 
   [[nodiscard]] uint64_t GetCapacity() const { return GetHeader()->data_capacity; }
 
@@ -230,7 +232,7 @@ class ShmManager {
 class Publisher {
  public:
   explicit Publisher(const std::string& shm_name, uint64_t capacity = 0)
-      : shm_(shm_name, Mode::ReadWrite, capacity), lock_(shm_name + ".lock") {
+      : control_block_(shm_name, Mode::ReadWrite, capacity), lock_(shm_name + ".lock") {
     lock_.Lock();
   }
 
@@ -239,35 +241,37 @@ class Publisher {
   Publisher(const Publisher&) = delete;
   Publisher& operator=(const Publisher&) = delete;
 
-  [[nodiscard]] const FrameHeader& Publish(std::span<const char> payload) {
-    ShmHeader* header = shm_.GetHeader();
-    uint64_t data_capacity = header->data_capacity;
-    void* data_start = shm_.GetDataStart();
+  [[nodiscard]] FrameHeader Publish(std::span<const char> payload) {
+    SpmsRingBufferControlBlock* cb = control_block_.GetHeader();
+    uint64_t data_capacity = cb->data_capacity;
+    void* data_start = control_block_.GetDataStart();
 
     uint32_t length = static_cast<uint32_t>(payload.size());
-    uint32_t rounded_payload_len = (length + 7) & ~7;
+    uint32_t rounded_payload_len = RoundUp8(length);
 
-    uint64_t current_offset = header->publish_offset.load(std::memory_order_acquire);
-    uint64_t remaining_space = data_capacity - (current_offset & (data_capacity - 1));
+    uint64_t current_offset = cb->publish_offset.load(std::memory_order_acquire);
+    uint64_t remaining_space = data_capacity - cb->MaskOffset(current_offset);
 
     if (rounded_payload_len + sizeof(FrameHeader) + sizeof(FrameHeader) > remaining_space) {
-      uint32_t padding_len = (remaining_space + 7) & ~7;
+      uint32_t padding_len = RoundUp8(remaining_space);
       std::span<const char> empty_payload;
-      WriteFrame(current_offset, empty_payload, FrameHeader::Type::kPadding, data_start, header);
-      current_offset = header->publish_offset.load(std::memory_order_acquire);
+      WriteFrame(current_offset, empty_payload, FrameHeader::Type::kPadding, data_start, cb);
+      current_offset = cb->publish_offset.load(std::memory_order_acquire);
     }
 
-    return WriteFrame(current_offset, payload, FrameHeader::Type::kMessage, data_start, header);
+    return WriteFrame(current_offset, payload, FrameHeader::Type::kMessage, data_start, cb);
   }
 
  private:
-  FrameHeader& WriteFrame(uint64_t offset, std::span<const char> payload, FrameHeader::Type frame_type,
-                          void* data_start, ShmHeader* header) {
-    uint64_t data_capacity = header->data_capacity;
-    uint64_t masked_offset = offset & (data_capacity - 1);
+  [[nodiscard]] static uint32_t RoundUp8(uint32_t value) { return (value + 7) & ~7; }
+
+  FrameHeader WriteFrame(uint64_t offset, std::span<const char> payload, FrameHeader::Type frame_type,
+                         void* data_start, SpmsRingBufferControlBlock* cb) {
+    uint64_t data_capacity = cb->data_capacity;
+    uint64_t masked_offset = cb->MaskOffset(offset);
     char* data_ptr = static_cast<char*>(data_start) + masked_offset;
 
-    uint32_t frame_len = (static_cast<uint32_t>(payload.size()) + 7) & ~7;
+    uint32_t frame_len = RoundUp8(static_cast<uint32_t>(payload.size()));
     uint32_t payload_len = (frame_type == FrameHeader::Type::kPadding) ? 0 : static_cast<uint32_t>(payload.size());
 
     auto* frame_header = static_cast<FrameHeader*>(static_cast<void*>(data_ptr));
@@ -275,8 +279,7 @@ class Publisher {
     frame_header->frame_len = frame_len;
     frame_header->payload_len = payload_len;
     frame_header->magic = kFrameHeaderMagic;
-    frame_type == FrameHeader::Type::kPadding ? frame_header->frame_type = FrameHeader::Type::kPadding
-                                              : frame_header->frame_type = FrameHeader::Type::kMessage;
+    frame_header->frame_type = frame_type;
     memset(frame_header->reserved.data(), 0, frame_header->reserved.size());
 
     if (frame_type == FrameHeader::Type::kMessage && !payload.empty()) {
@@ -289,20 +292,20 @@ class Publisher {
 
     uint64_t total_written = sizeof(FrameHeader) + frame_len;
     uint64_t new_offset = offset + total_written;
-    header->publish_offset.store(new_offset, std::memory_order_release);
+    cb->publish_offset.store(new_offset, std::memory_order_release);
 
     return *frame_header;
   }
 
-  ShmManager shm_;
+  ShmManager control_block_;
   FileLock lock_;
 };
 
 class Subscriber {
  public:
-  explicit Subscriber(const std::string& shm_name) : shm_(shm_name, Mode::ReadOnly, 0) {
-    ShmHeader* header = shm_.GetHeader();
-    cache_publish_offset_ = header->publish_offset.load(std::memory_order_acquire);
+  explicit Subscriber(const std::string& shm_name) : control_block_(shm_name, Mode::ReadOnly, 0) {
+    SpmsRingBufferControlBlock* cb = control_block_.GetHeader();
+    cache_publish_offset_ = cb->publish_offset.load(std::memory_order_acquire);
     subscribe_offset_ = cache_publish_offset_;
   }
 
@@ -312,12 +315,12 @@ class Subscriber {
   Subscriber& operator=(const Subscriber&) = delete;
 
   [[nodiscard]] ReadResult TryRead() {
-    ShmHeader* header = shm_.GetHeader();
-    uint64_t data_capacity = header->data_capacity;
-    void* data_start = shm_.GetDataStart();
+    SpmsRingBufferControlBlock* cb = control_block_.GetHeader();
+    uint64_t data_capacity = cb->data_capacity;
+    void* data_start = control_block_.GetDataStart();
 
     if (subscribe_offset_ == cache_publish_offset_) {
-      cache_publish_offset_ = header->publish_offset.load(std::memory_order_acquire);
+      cache_publish_offset_ = cb->publish_offset.load(std::memory_order_acquire);
     }
 
     if (subscribe_offset_ == cache_publish_offset_) {
@@ -329,7 +332,7 @@ class Subscriber {
       return {};
     }
 
-    uint64_t masked_offset = subscribe_offset_ & (data_capacity - 1);
+    uint64_t masked_offset = cb->MaskOffset(subscribe_offset_);
     char* data_ptr = static_cast<char*>(data_start) + masked_offset;
 
     auto* frame_header = static_cast<FrameHeader*>(static_cast<void*>(data_ptr));
@@ -351,7 +354,7 @@ class Subscriber {
   }
 
  private:
-  ShmManager shm_;
+  ShmManager control_block_;
   uint64_t subscribe_offset_ = 0;
   uint64_t cache_publish_offset_ = 0;
 };
