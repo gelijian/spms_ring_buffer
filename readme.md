@@ -135,12 +135,42 @@ class Publisher {
   // Handles wrapping, padding, and Acquire/Release ordering.
   // Returns FrameHeader for debugging purposes.
   [[nodiscard]] FrameHeader Publish(std::span<const char> payload);
+
+  // Batch API for minimizing publish_offset writes
+  class Batch;
+  [[nodiscard]] Batch CreateBatch();
 };
 
 } // namespace spms_ring_buffer
 ```
 
-### 3.4 Subscriber Interface
+### 3.4 Batch Interface
+```cpp
+namespace spms_ring_buffer {
+
+class Publisher::Batch {
+ public:
+  explicit Batch(Publisher& publisher);
+  ~Batch();  // Auto-commits if not already committed
+
+  Batch(const Batch&) = delete;
+  Batch& operator=(const Batch&) = delete;
+
+  // Add a frame to the batch (does not update publish_offset)
+  // Returns FrameHeader for debugging purposes.
+  [[nodiscard]] FrameHeader Add(std::span<const char> payload);
+
+  // Commit the batch (single atomic write to publish_offset)
+  void Commit();
+
+  // Check if batch has been committed
+  [[nodiscard]] bool IsCommitted() const;
+};
+
+} // namespace spms_ring_buffer
+```
+
+### 3.5 Subscriber Interface
 ```cpp
 namespace spms_ring_buffer {
 
@@ -179,10 +209,11 @@ class Subscriber {
 
 ## 4. Deliverables Requirement
 
-1.  **`spms_ring_buffer.h`**: Core library (Publisher, Subscriber, FrameHeader, ReadResult).
+1.  **`spms_ring_buffer.h`**: Core library (Publisher, Subscriber, Batch, FrameHeader, ReadResult).
 2.  **`shared_memory.h`**: Shared memory wrapper (SharedMemory class).
 3.  **`file_lock.h`**: File lock wrapper (FileLock class).
 4.  **`publisher.cc` / `subscriber.cc`**: Demo applications.
 5.  **Error Handling**: Use C++ exceptions. No `std::format`.
 6.  **No Loop Guarantee**: `TryRead` must not contain internal `while` loops for skipping padding; it should process one frame (either Message or Padding) per call.
 7.  **Fault Recovery Test**: Demonstrate killing and restarting the publisher/subscriber without corrupting the ring buffer.
+8.  **Batch API**: The Publisher provides a Batch class for batching multiple frames with a single atomic write to publish_offset.

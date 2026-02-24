@@ -103,30 +103,83 @@ class Publisher {
   Publisher& operator=(Publisher&&) = delete;
 
   [[nodiscard]] FrameHeader Publish(std::span<const char> payload) {
-    auto payload_len = static_cast<uint32_t>(payload.size());
-    auto rounded_payload_len = RoundUp8(payload_len);
-    auto current_offset = control_block_->publish_offset.load(std::memory_order_acquire);
-    if (auto remaining_space = control_block_->data_capacity - control_block_->PhysicalOffset(current_offset);
-        rounded_payload_len + 2 * sizeof(FrameHeader) > remaining_space) {
-      FrameHeader padding_header{};
-      padding_header.logical_offset = current_offset;
-      padding_header.frame_len = remaining_space - sizeof(FrameHeader);
-      padding_header.payload_len = 0;
-      padding_header.magic = kFrameHeaderMagic;
-      padding_header.frame_type = FrameHeader::Type::kPadding;
-      WriteFrame(padding_header, {});
-      current_offset = padding_header.OffsetEnd();
-    }
-
-    FrameHeader header{};
-    header.logical_offset = current_offset;
-    header.frame_len = rounded_payload_len;
-    header.payload_len = payload_len;
-    header.magic = kFrameHeaderMagic;
-    header.frame_type = FrameHeader::Type::kMessage;
-    WriteFrame(header, payload);
+    Batch batch(*this);
+    auto header = batch.Add(payload);
+    batch.Commit();
     return header;
   }
+
+  class Batch {
+   public:
+    explicit Batch(Publisher& publisher) : publisher_(publisher) {
+      start_offset_ = publisher_.control_block_->publish_offset.load(std::memory_order_acquire);
+      current_offset_ = start_offset_;
+    }
+
+    ~Batch() {
+      if (!committed_) {
+        Commit();
+      }
+    }
+
+    Batch(const Batch&) = delete;
+    Batch& operator=(const Batch&) = delete;
+
+    [[nodiscard]] FrameHeader Add(std::span<const char> payload) {
+      auto payload_len = static_cast<uint32_t>(payload.size());
+      auto rounded_payload_len = RoundUp8(payload_len);
+
+      if (auto remaining_space = publisher_.control_block_->data_capacity -
+                                  publisher_.control_block_->PhysicalOffset(current_offset_);
+          rounded_payload_len + 2 * sizeof(FrameHeader) > remaining_space) {
+        FrameHeader padding_header{};
+        padding_header.logical_offset = current_offset_;
+        padding_header.frame_len = remaining_space - sizeof(FrameHeader);
+        padding_header.payload_len = 0;
+        padding_header.magic = kFrameHeaderMagic;
+        padding_header.frame_type = FrameHeader::Type::kPadding;
+        WriteFrameInternal(padding_header, {});
+        current_offset_ = padding_header.OffsetEnd();
+      }
+
+      FrameHeader header{};
+      header.logical_offset = current_offset_;
+      header.frame_len = rounded_payload_len;
+      header.payload_len = payload_len;
+      header.magic = kFrameHeaderMagic;
+      header.frame_type = FrameHeader::Type::kMessage;
+      WriteFrameInternal(header, payload);
+      current_offset_ = header.OffsetEnd();
+      return header;
+    }
+
+    void Commit() {
+      if (!committed_) {
+        publisher_.control_block_->publish_offset.store(current_offset_, std::memory_order_release);
+        committed_ = true;
+      }
+    }
+
+    [[nodiscard]] bool IsCommitted() const { return committed_; }
+
+   private:
+    [[nodiscard]] static uint32_t RoundUp8(uint32_t value) { return (value + 7) & ~7; }
+
+    void WriteFrameInternal(const FrameHeader& header, std::span<const char> body) {
+      auto data_ptr = publisher_.data_start_ + publisher_.control_block_->PhysicalOffset(header.logical_offset);
+      memcpy(data_ptr, &header, sizeof(FrameHeader));
+      if (!body.empty()) {
+        memcpy(data_ptr + sizeof(FrameHeader), body.data(), body.size());
+      }
+    }
+
+    Publisher& publisher_;
+    uint64_t start_offset_ = 0;
+    uint64_t current_offset_ = 0;
+    bool committed_ = false;
+  };
+
+  [[nodiscard]] Batch CreateBatch() { return Batch(*this); }
 
  private:
   [[nodiscard]] static uint32_t RoundUp8(uint32_t value) { return (value + 7) & ~7; }
