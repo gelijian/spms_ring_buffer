@@ -21,11 +21,12 @@ int main(int argc, char* argv[]) {
   std::vector<char> buffer(4096);
 
   while (true) {
-    std::span<const char> data = subscriber.TryRead();
+    ReadResult result = subscriber.TryRead();
 
-    if (!data.empty()) {
-      std::string message(data.data(), data.size());
-      std::cout << "Received: " << message << std::endl;
+    if (!result.payload.empty()) {
+      std::string message(result.payload.data(), result.payload.size());
+      std::cout << "Received: " << message << " | frame_len=" << result.header.frame_len
+                << ", payload_len=" << result.header.payload_len << std::endl;
     } else {
       std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }

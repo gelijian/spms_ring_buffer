@@ -40,6 +40,11 @@ struct FrameHeader {
 static_assert(sizeof(FrameHeader) == 32);
 #pragma pack(pop)
 
+struct ReadResult {
+  FrameHeader header;
+  std::span<const char> payload;
+};
+
 struct alignas(kCacheLineSize) ShmHeader {
   uint64_t magic = 0;
   uint64_t data_capacity = 0;
@@ -234,11 +239,12 @@ class Publisher {
   Publisher(const Publisher&) = delete;
   Publisher& operator=(const Publisher&) = delete;
 
-  void Publish(const void* payload, uint32_t length) {
+  [[nodiscard]] const FrameHeader& Publish(std::span<const char> payload) {
     ShmHeader* header = shm_.GetHeader();
     uint64_t data_capacity = header->data_capacity;
     void* data_start = shm_.GetDataStart();
 
+    uint32_t length = static_cast<uint32_t>(payload.size());
     uint32_t rounded_payload_len = (length + 7) & ~7;
     uint64_t total_frame_size = sizeof(FrameHeader) + rounded_payload_len;
 
@@ -251,7 +257,7 @@ class Publisher {
       current_offset = header->publish_offset.load(std::memory_order_acquire);
     }
 
-    WriteMessageFrame(current_offset, payload, length, rounded_payload_len, data_start, data_capacity, header);
+    return WriteMessageFrame(current_offset, payload.data(), length, rounded_payload_len, data_start, data_capacity, header);
   }
 
  private:
@@ -273,8 +279,8 @@ class Publisher {
     shm_header->publish_offset.store(new_offset, std::memory_order_release);
   }
 
-  void WriteMessageFrame(uint64_t offset, const void* payload, uint32_t length, uint32_t frame_len, void* data_start,
-                         uint64_t data_capacity, ShmHeader* header) {
+  FrameHeader& WriteMessageFrame(uint64_t offset, const void* payload, uint32_t length, uint32_t frame_len, void* data_start,
+                          uint64_t data_capacity, ShmHeader* header) {
     uint64_t masked_offset = offset & (data_capacity - 1);
     char* data_ptr = static_cast<char*>(data_start) + masked_offset;
 
@@ -296,6 +302,8 @@ class Publisher {
     uint64_t total_written = sizeof(FrameHeader) + frame_len;
     uint64_t new_offset = offset + total_written;
     header->publish_offset.store(new_offset, std::memory_order_release);
+
+    return *frame_header;
   }
 
   ShmManager shm_;
@@ -315,7 +323,7 @@ class Subscriber {
   Subscriber(const Subscriber&) = delete;
   Subscriber& operator=(const Subscriber&) = delete;
 
-  [[nodiscard]] std::span<const char> TryRead() {
+  [[nodiscard]] ReadResult TryRead() {
     ShmHeader* header = shm_.GetHeader();
     uint64_t data_capacity = header->data_capacity;
     void* data_start = shm_.GetDataStart();
@@ -347,11 +355,11 @@ class Subscriber {
     subscribe_offset_ += total_len;
 
     if (frame_header->frame_type == FrameHeader::Type::kPadding) {
-      return {};
+      return {*frame_header, {}};
     }
 
     char* payload_ptr = data_ptr + sizeof(FrameHeader);
-    return {payload_ptr, static_cast<size_t>(frame_header->payload_len)};
+    return {*frame_header, {payload_ptr, static_cast<size_t>(frame_header->payload_len)}};
   }
 
  private:

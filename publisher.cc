@@ -27,9 +27,11 @@ int main(int argc, char* argv[]) {
     std::string message = "Frame #" + std::to_string(frame_count++) + " - Message from publisher at " +
                           std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
 
-    publisher.Publish(message.data(), static_cast<uint32_t>(message.size()));
+    std::span<const char> payload(message);
+    const FrameHeader& header = publisher.Publish(payload);
 
-    std::cout << "Published: " << message << std::endl;
+    std::cout << "Published: " << message << " | frame_len=" << header.frame_len
+              << ", payload_len=" << header.payload_len << std::endl;
 
     std::this_thread::sleep_for(std::chrono::seconds(1));
   }
