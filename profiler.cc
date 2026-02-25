@@ -21,7 +21,7 @@ struct Config {
   size_t message_size = 64;
   uint64_t message_count = 100000;
   uint64_t warmup = 1000;
-  uint64_t rate = 0;
+  uint64_t rate = 10000;
 };
 
 class LatencyStats {
@@ -43,6 +43,8 @@ class LatencyStats {
     uint64_t max = 0;
     uint64_t avg = 0;
     uint64_t p50 = 0;
+    uint64_t p90 = 0;
+    uint64_t p95 = 0;
     uint64_t p99 = 0;
     uint64_t p999 = 0;
 
@@ -51,6 +53,8 @@ class LatencyStats {
          << std::setw(13) << r.max << " | "
          << std::setw(13) << r.avg << " | "
          << std::setw(13) << r.p50 << " | "
+         << std::setw(13) << r.p90 << " | "
+         << std::setw(13) << r.p95 << " | "
          << std::setw(13) << r.p99 << " | "
          << std::setw(13) << r.p999;
       return os;
@@ -68,6 +72,8 @@ class LatencyStats {
     r.max = sorted.back();
     r.avg = std::accumulate(sorted.begin(), sorted.end(), 0ULL) / sorted.size();
     r.p50 = sorted[sorted.size() * 50 / 100];
+    r.p90 = sorted[sorted.size() * 90 / 100];
+    r.p95 = sorted[sorted.size() * 95 / 100];
     r.p99 = sorted[sorted.size() * 99 / 100];
     r.p999 = sorted[sorted.size() * 999 / 1000];
     return r;
@@ -216,8 +222,8 @@ void PrintResults(Config& cfg, GlobalStats& stats) {
   std::cout << "Rate: " << (cfg.rate > 0 ? std::to_string(cfg.rate) : "unlimited") << " msg/sec\n\n";
 
   std::cout << "Per-Subscriber Latency (ns):\n";
-  std::cout << "          |      Min      |      Max      |      Avg      |      P50      |      P99      |     P999\n";
-  std::cout << "----------|---------------|---------------|---------------|---------------|---------------|-------------\n";
+  std::cout << "          |      Min      |      Max      |      Avg      |      P50      |      P90      |      P95      |      P99      |     P999\n";
+  std::cout << "----------|---------------|---------------|---------------|---------------|---------------|---------------|---------------|-------------\n";
 
   size_t total_received = 0;
   for (int i = 0; i < cfg.subscriber_count; i++) {
