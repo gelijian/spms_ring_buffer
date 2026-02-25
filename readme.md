@@ -44,7 +44,7 @@ struct FrameHeader {
   };
 
   uint64_t logical_offset = 0;  // Monotonically increasing offset BEFORE this frame
-  uint32_t frame_len = 0;    // Total len (excl. header) rounded to 8 bytes (except padding)
+  uint32_t frame_len = 0;    // Frame body len (do not include header) rounded to 8 bytes (except padding)
   uint32_t payload_len = 0;  // Actual data len; <= frame_len
   uint32_t magic = kFrameHeaderMagic; 
   Type frame_type = Type::kMessage;
