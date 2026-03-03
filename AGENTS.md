@@ -253,3 +253,28 @@ batch.Commit();  // Single atomic publish_offset update
 - Added Batch class for efficient bulk publishing
 - Added profiler executable with latency percentiles (p50, p90, p95, p99, p999)
 - Release build uses -O3 optimization
+
+---
+
+## 8. oh-my-opencode
+
+This project uses [oh-my-opencode](https://github.com/code-yeongyu/oh-my-opencode) as the AI coding agent harness.
+
+### Installation
+
+```bash
+# Install bun (if not installed)
+curl -fsSL https://bun.sh/install | bash
+
+# Install oh-my-opencode
+bunx oh-my-opencode install --no-tui --claude=<yes|no|max20> --openai=<yes|no> --gemini=<yes|no> --copilot=<yes|no> [--opencode-zen=<yes|no>] [--zai-coding-plan=<yes|no>]
+```
+
+### Current Model
+
+The current model being used is **MiniMax M2.5** (via OpenCode's free tier). This is a fast, smart model good for utility tasks.
+
+### Configuration Files
+
+- `~/.config/opencode/opencode.json` - Main OpenCode config with plugins
+- `~/.config/opencode/oh-my-opencode.json` - oh-my-opencode agent configurations
