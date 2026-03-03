@@ -1,0 +1,5 @@
+add_executable(spms_ring_buffer_test spms_ring_buffer_test.cc)
+target_include_directories(spms_ring_buffer_test PRIVATE ${CMAKE_SOURCE_DIR})
+target_link_libraries(spms_ring_buffer_test doctest pthread)
+
+add_test(NAME spms_ring_buffer_test COMMAND spms_ring_buffer_test)

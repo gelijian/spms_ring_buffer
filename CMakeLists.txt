@@ -7,6 +7,16 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_BUILD_TYPE Release)
 set(CMAKE_CXX_FLAGS_RELEASE "-O3")
 
+include(FetchContent)
+FetchContent_Declare(
+  doctest
+  GIT_REPOSITORY https://github.com/doctest/doctest
+  GIT_TAG v2.4.11
+)
+FetchContent_MakeAvailable(doctest)
+
+enable_testing()
+
 add_executable(publisher publisher.cc)
 target_link_libraries(publisher pthread)
 
@@ -15,3 +25,5 @@ target_link_libraries(subscriber pthread)
 
 add_executable(profiler profiler.cc)
 target_link_libraries(profiler pthread)
+
+add_subdirectory(tests)
