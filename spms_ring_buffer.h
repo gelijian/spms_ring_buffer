@@ -71,31 +71,53 @@ class InvalidFrameException : public std::runtime_error {
   InvalidFrameException() : std::runtime_error("Invalid frame header: magic mismatch (data corruption detected)") {}
 };
 
+class [[nodiscard]] PublisherLock {
+ public:
+  PublisherLock() = default;
+  explicit PublisherLock(FileLock& lock) : lock_ptr_(&lock) { lock_ptr_->Lock(); }
+  ~PublisherLock() { 
+    if (lock_ptr_) lock_ptr_->Unlock(); 
+  }
+  PublisherLock(const PublisherLock&) = delete;
+  PublisherLock& operator=(const PublisherLock&) = delete;
+
+ private:
+  FileLock* lock_ptr_ = nullptr;
+};
+
 class Publisher {
  public:
+  static bool IsPowerOfTwo(uint64_t n) { return n > 0 && (n & (n - 1)) == 0; }
+
   explicit Publisher(const std::string& shm_name, uint64_t capacity = 0)
       : shm_(shm_name, SharedMemory::Mode::ReadWrite, SpmsRingBufferControlBlock::ComputeRequiredSize(capacity)),
         control_block_(static_cast<SpmsRingBufferControlBlock*>(shm_.GetBaseAddr())),
         data_start_(static_cast<char*>(shm_.GetBaseAddr()) + sizeof(SpmsRingBufferControlBlock)),
         lock_(shm_name + ".lock") {
+    if (capacity > 0 && !IsPowerOfTwo(capacity)) {
+      throw std::invalid_argument("capacity must be power of two, got " + std::to_string(capacity));
+    }
+
     if (shm_.IsCreated()) {
       control_block_->magic = kShmMagic;
       control_block_->data_capacity = capacity;
       control_block_->publish_offset.store(0, std::memory_order_release);
     } else {
       if (control_block_->magic != kShmMagic) {
-        throw std::runtime_error("Invalid shm magic");
+        throw std::runtime_error("Invalid shm magic: expected 0x" + 
+          std::to_string(kShmMagic) + ", got 0x" + 
+          std::to_string(control_block_->magic));
       }
       if (control_block_->data_capacity != capacity) {
-        throw std::runtime_error("Capacity mismatch: expected " + std::to_string(capacity) + ", got " +
-                                 std::to_string(control_block_->data_capacity));
+        throw std::runtime_error("Capacity mismatch: expected " + std::to_string(capacity) + 
+          ", got " + std::to_string(control_block_->data_capacity));
       }
     }
 
-    lock_.Lock();
+    PublisherLock lock_holder_{lock_};
   }
 
-  ~Publisher() { lock_.Unlock(); }
+  ~Publisher() = default;
 
   Publisher(const Publisher&) = delete;
   Publisher(Publisher&&) = delete;
@@ -147,6 +169,11 @@ class Publisher {
 
     [[nodiscard]] bool IsCommitted() const { return committed_; }
 
+    Batch(Batch&&) noexcept = default;
+    Batch& operator=(Batch&&) noexcept = default;
+    Batch(const Batch&) = delete;
+    Batch& operator=(const Batch&) = delete;
+
    private:
     explicit Batch(Publisher& publisher)
         : control_block_(publisher.control_block_), data_start_(publisher.data_start_) {
@@ -155,6 +182,10 @@ class Publisher {
     }
 
     [[nodiscard]] static uint32_t RoundUp8(uint32_t value) { return (value + 7) & ~7; }
+
+    [[nodiscard]] char* GetDataPtr(uint64_t offset) const {
+      return data_start_ + control_block_->PhysicalOffset(offset);
+    }
 
     void WriteFrameInternal(const FrameHeader& header, std::span<const char> body) {
       auto data_ptr = data_start_ + control_block_->PhysicalOffset(header.logical_offset);
@@ -180,6 +211,7 @@ class Publisher {
   SpmsRingBufferControlBlock* control_block_;
   char* data_start_;
   FileLock lock_;
+  PublisherLock lock_holder_;
 };
 
 class Subscriber {
@@ -230,6 +262,10 @@ class Subscriber {
     }
     char* payload_ptr = data_ptr + sizeof(FrameHeader);
     return {frame_header, {payload_ptr, static_cast<size_t>(frame_header.payload_len)}};
+  }
+
+  [[nodiscard]] const char* GetDataPtr(uint64_t offset) const {
+    return data_start_ + control_block_->PhysicalOffset(offset);
   }
 
  private:
