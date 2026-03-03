@@ -172,19 +172,15 @@ TEST_CASE("test_subscriber_skips_padding") {
 
   Publisher publisher(shm_name, 256);
 
-  for (int i = 0; i < 1; i++) {
+  for (int i = 0; i < 3; i++) {
     std::string payload = "msg";
     (void)publisher.Publish(std::span<const char>(payload));
   }
 
-  Subscriber subscriber(shm_name);
-
-  for (int i = 0; i < 1; i++) {
-    (void)subscriber.TryRead();
-  }
-
-  std::string large_msg(180, 'y');
+  std::string large_msg(150, 'y');
   (void)publisher.Publish(std::span<const char>(large_msg));
+
+  Subscriber subscriber(shm_name);
 
   std::this_thread::sleep_for(std::chrono::microseconds(100));
 
@@ -270,5 +266,35 @@ TEST_CASE("test_no_padding_when_exact_fit") {
     }
   }
 
-  CHECK(count == messages.size());
+    CHECK(count == messages.size());
+}
+
+TEST_CASE("test_slow_subscriber_overrun_detection") {
+    std::string shm_name = "test_shm_" + std::to_string(test_counter++);
+    ShmCleanupFixture cleanup(shm_name);
+
+    // Create Publisher with small capacity (256)
+    Publisher publisher(shm_name, 256);
+
+    // Create Subscriber first (for memory visibility)
+    Subscriber subscriber(shm_name);
+
+    // Publish 25 messages - each ~16 bytes payload + 24 bytes header = ~40 bytes
+    // 25 * 40 = 1000 bytes > 256 capacity, should trigger overrun
+    for (int i = 0; i < 25; ++i) {
+        std::string payload = "msg_payload_16byte";  // 16 bytes
+        (void)publisher.Publish(std::span<const char>(payload));
+    }
+
+    std::this_thread::sleep_for(std::chrono::microseconds(100));
+
+    // Try to read - should throw OverrunException
+    bool caught_overrun = false;
+    try {
+        (void)subscriber.TryRead();
+    } catch (const OverrunException& e) {
+        caught_overrun = true;
+    }
+
+    CHECK(caught_overrun);
 }
