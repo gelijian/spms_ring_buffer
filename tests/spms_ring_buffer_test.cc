@@ -352,15 +352,7 @@ TEST_CASE("test_slow_subscriber_overrun_detection") {
     std::this_thread::sleep_for(std::chrono::microseconds(100));
 
     // Try to read - should throw OverrunException
-    bool caught_overrun = false;
-    try {
-        (void)subscriber.TryRead();
-    } catch (const OverrunException& e) {
-        caught_overrun = true;
-        (void)e;
-    }
-
-    CHECK(caught_overrun);
+    CHECK_THROWS_AS((void)subscriber.TryRead(), OverrunException);
 }
 
 TEST_CASE("test_file_lock_constructor_locks") {
@@ -394,7 +386,7 @@ TEST_CASE("test_file_lock_throws_if_locked") {
   std::string lock_name = "test_lock_" + std::to_string(test_counter++);
   std::string lock_path = "/dev/shm/" + lock_name;
 
-  // Create first lock (A) in a child process to ensure lock is held by different process
+  // Create first lock (A) to ensure lock is in a child process held by different process
   pid_t pid = fork();
   if (pid == 0) {
     // Child process: acquire lock and hold it
@@ -408,20 +400,11 @@ TEST_CASE("test_file_lock_throws_if_locked") {
   usleep(100000);  // 100ms
 
   // Try to create second lock (B) - should throw because child holds it
-  bool caught_exception = false;
-  try {
-    FileLock lock_b(lock_name);
-    CHECK(false);
-  } catch (const std::runtime_error& e) {
-    caught_exception = true;
-    CHECK(e.what() != nullptr);
-  }
+  CHECK_THROWS(([&] { FileLock lock_b(lock_name); })());
 
   // Wait for child to finish
   int status;
   waitpid(pid, &status, 0);
-
-  CHECK(caught_exception);
 
   // Cleanup
   unlink(lock_path.c_str());
