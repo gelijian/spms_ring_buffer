@@ -71,20 +71,6 @@ class InvalidFrameException : public std::runtime_error {
   InvalidFrameException() : std::runtime_error("Invalid frame header: magic mismatch (data corruption detected)") {}
 };
 
-class [[nodiscard]] PublisherLock {
- public:
-  PublisherLock() = default;
-  explicit PublisherLock(FileLock& lock) : lock_ptr_(&lock) { lock_ptr_->Lock(); }
-  ~PublisherLock() { 
-    if (lock_ptr_) lock_ptr_->Unlock(); 
-  }
-  PublisherLock(const PublisherLock&) = delete;
-  PublisherLock& operator=(const PublisherLock&) = delete;
-
- private:
-  FileLock* lock_ptr_ = nullptr;
-};
-
 class Publisher {
  public:
   static bool IsPowerOfTwo(uint64_t n) { return n > 0 && (n & (n - 1)) == 0; }
@@ -113,8 +99,6 @@ class Publisher {
           ", got " + std::to_string(control_block_->data_capacity));
       }
     }
-
-    PublisherLock lock_holder_{lock_};
   }
 
   ~Publisher() = default;
@@ -211,7 +195,6 @@ class Publisher {
   SpmsRingBufferControlBlock* control_block_;
   char* data_start_;
   FileLock lock_;
-  PublisherLock lock_holder_;
 };
 
 class Subscriber {
