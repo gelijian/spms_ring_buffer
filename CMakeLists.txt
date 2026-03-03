@@ -7,13 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_BUILD_TYPE Release)
 set(CMAKE_CXX_FLAGS_RELEASE "-O3")
 
-include(FetchContent)
-FetchContent_Declare(
-  doctest
-  GIT_REPOSITORY https://github.com/doctest/doctest
-  GIT_TAG v2.4.11
-)
-FetchContent_MakeAvailable(doctest)
+find_package(doctest REQUIRED)
 
 enable_testing()
 

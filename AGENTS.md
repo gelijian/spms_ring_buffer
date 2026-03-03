@@ -21,6 +21,21 @@ cmake -B build && cmake --build build
 rm -rf build && cmake -B build && cmake --build build
 ```
 
+### Building with Conan
+
+```bash
+# Install dependencies and configure
+conan install . --build=missing
+
+# Build using Conan-generated toolchain
+cmake -B build -G "Unix Makefiles" \
+  -DCMAKE_TOOLCHAIN_FILE=build/Release/generators/conan_toolchain.cmake \
+  -DCMAKE_POLICY_DEFAULT_CMP0091=NEW \
+  -DCMAKE_BUILD_TYPE=Release
+
+cmake --build build
+```
+
 ### Running Demo
 
 ```bash
@@ -52,13 +67,10 @@ rm -rf build && cmake -B build && cmake --build build
 
 ### Testing
 
-No formal test framework. To test:
-1. Build the project
-2. Run publisher in one terminal
-3. Run subscriber in another terminal
-4. Verify messages are received
-
-Or use the profiler for automated latency testing.
+```bash
+# Run unit tests
+./build/tests/spms_ring_buffer_test
+```
 
 ### Clean Up
 
