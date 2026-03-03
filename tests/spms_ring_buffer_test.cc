@@ -39,8 +39,6 @@ static int test_counter = 0;
 
 }  // namespace spms_ring_buffer
 
-TEST_CASE("placeholder test") { CHECK(true); }
-
 TEST_CASE("test_shared_memory_create") {
   std::string shm_name = "test_shm_util_" + std::to_string(test_counter++);
   ShmCleanupFixture cleanup(shm_name);
@@ -325,9 +323,7 @@ TEST_CASE("test_no_padding_when_exact_fit") {
     if (result.header.frame_type == FrameHeader::Type::kMessage && result.payload.size() > 0) {
       count++;
     }
-    if (result.header.frame_type == FrameHeader::Type::kPadding) {
-      CHECK(false);
-    }
+    CHECK_FALSE(result.header.frame_type == FrameHeader::Type::kPadding);
     if (result.header.frame_type == FrameHeader::Type::kMessage && result.payload.size() == 0) {
       break;
     }
@@ -361,6 +357,7 @@ TEST_CASE("test_slow_subscriber_overrun_detection") {
         (void)subscriber.TryRead();
     } catch (const OverrunException& e) {
         caught_overrun = true;
+        (void)e;
     }
 
     CHECK(caught_overrun);
@@ -414,7 +411,6 @@ TEST_CASE("test_file_lock_throws_if_locked") {
   bool caught_exception = false;
   try {
     FileLock lock_b(lock_name);
-    // Should not reach here
     CHECK(false);
   } catch (const std::runtime_error& e) {
     caught_exception = true;
