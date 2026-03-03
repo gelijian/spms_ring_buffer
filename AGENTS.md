@@ -272,7 +272,14 @@ bunx oh-my-opencode install --no-tui --claude=<yes|no|max20> --openai=<yes|no> -
 
 ### Current Model
 
-The current model being used is **MiniMax M2.5** (via OpenCode's free tier). This is a fast, smart model good for utility tasks.
+The current model being used is **MiniMax M2.5** (via OpenCode Zen). This is a fast, smart model good for utility tasks.
+
+**Note**: To use MiniMax M2.5, you must authenticate with OpenCode Zen:
+```bash
+opencode auth login
+# Select: OpenCode Zen
+# Then visit https://opencode.ai/auth to get your API key
+```
 
 ### Configuration Files
 
