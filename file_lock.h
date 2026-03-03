@@ -27,16 +27,18 @@ class FileLock {
                                ", errno=" + std::to_string(errno));
     }
 
-    // Acquire lock immediately on construction
     struct flock fl{};
     fl.l_type = F_WRLCK;
     fl.l_whence = SEEK_SET;
     fl.l_start = 0;
     fl.l_len = 0;
 
-    if (fcntl(fd_, F_SETLKW, &fl) < 0) {
+    if (fcntl(fd_, F_SETLK, &fl) < 0) {
       close(fd_);
       fd_ = -1;
+      if (errno == EACCES || errno == EAGAIN) {
+        throw std::runtime_error("Failed to acquire lock: file is locked by another process");
+      }
       throw std::runtime_error("Failed to lock file: " + full_path +
                                ", errno=" + std::to_string(errno));
     }
@@ -44,15 +46,12 @@ class FileLock {
 
   ~FileLock() {
     if (fd_ >= 0) {
-      // Release lock
       struct flock fl{};
       fl.l_type = F_UNLCK;
       fl.l_whence = SEEK_SET;
       fl.l_start = 0;
       fl.l_len = 0;
       fcntl(fd_, F_SETLK, &fl);
-
-      // Close file descriptor
       close(fd_);
     }
   }

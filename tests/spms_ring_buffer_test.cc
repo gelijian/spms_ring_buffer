@@ -1,11 +1,14 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest/doctest.h"
 
+#include <sys/wait.h>
 #include <string>
 #include <thread>
 #include <unistd.h>
 #include <vector>
 
+#include "file_lock.h"
+#include "shared_memory.h"
 #include "spms_ring_buffer.h"
 
 using namespace spms_ring_buffer;
@@ -37,6 +40,70 @@ static int test_counter = 0;
 }  // namespace spms_ring_buffer
 
 TEST_CASE("placeholder test") { CHECK(true); }
+
+TEST_CASE("test_shared_memory_create") {
+  std::string shm_name = "test_shm_util_" + std::to_string(test_counter++);
+  ShmCleanupFixture cleanup(shm_name);
+
+  SharedMemory shm(shm_name, SharedMemory::Mode::ReadWrite, 4096);
+
+  CHECK(shm.IsCreated() == true);
+  CHECK(shm.GetSize() >= 4096);
+}
+
+TEST_CASE("test_shared_memory_open_existing") {
+  std::string shm_name = "test_shm_util_" + std::to_string(test_counter++);
+  ShmCleanupFixture cleanup(shm_name);
+
+  // Create new shared memory
+  SharedMemory shm1(shm_name, SharedMemory::Mode::ReadWrite, 4096);
+  CHECK(shm1.IsCreated() == true);
+
+  // Open existing shared memory
+  SharedMemory shm2(shm_name, SharedMemory::Mode::ReadWrite, 4096);
+  CHECK(shm2.IsCreated() == false);
+}
+
+TEST_CASE("test_shared_memory_read_write") {
+  std::string shm_name = "test_shm_util_" + std::to_string(test_counter++);
+  ShmCleanupFixture cleanup(shm_name);
+
+  SharedMemory shm(shm_name, SharedMemory::Mode::ReadWrite, 4096);
+
+  // Write data
+  const char* write_data = "Hello Shared Memory";
+  std::memcpy(shm.GetBaseAddr(), write_data, std::strlen(write_data) + 1);
+
+  // Read back and verify
+  const char* read_data = static_cast<const char*>(shm.GetBaseAddr());
+  CHECK_EQ(std::strcmp(read_data, write_data), 0);
+}
+
+TEST_CASE("test_shared_memory_read_only_mode") {
+  std::string shm_name = "test_shm_util_" + std::to_string(test_counter++);
+  ShmCleanupFixture cleanup(shm_name);
+
+  // Create RW shared memory first
+  SharedMemory shm_rw(shm_name, SharedMemory::Mode::ReadWrite, 4096);
+  const char* write_data = "test data";
+  std::memcpy(shm_rw.GetBaseAddr(), write_data, std::strlen(write_data) + 1);
+
+  // Open ReadOnly
+  SharedMemory shm_ro(shm_name, SharedMemory::Mode::ReadOnly, 4096);
+
+  CHECK(shm_ro.GetBaseAddr() != nullptr);
+  CHECK(shm_ro.GetSize() >= 4096);
+}
+
+TEST_CASE("test_shared_memory_get_size") {
+  std::string shm_name = "test_shm_util_" + std::to_string(test_counter++);
+  ShmCleanupFixture cleanup(shm_name);
+
+  const uint64_t kTestSize = 8192;
+  SharedMemory shm(shm_name, SharedMemory::Mode::ReadWrite, kTestSize);
+
+  CHECK(shm.GetSize() >= kTestSize);
+}
 
 TEST_CASE("test_publish_single_message") {
   std::string shm_name = "test_shm_" + std::to_string(test_counter++);
@@ -297,4 +364,69 @@ TEST_CASE("test_slow_subscriber_overrun_detection") {
     }
 
     CHECK(caught_overrun);
+}
+
+TEST_CASE("test_file_lock_constructor_locks") {
+  std::string lock_name = "test_lock_" + std::to_string(test_counter++);
+  std::string lock_path = "/dev/shm/" + lock_name;
+
+  // Should not throw - lock acquired
+  FileLock lock(lock_name);
+
+  // Cleanup
+  unlink(lock_path.c_str());
+}
+
+TEST_CASE("test_file_lock_destructor_unlocks") {
+  std::string lock_name = "test_lock_" + std::to_string(test_counter++);
+  std::string lock_path = "/dev/shm/" + lock_name;
+
+  {
+    // Create and hold lock
+    FileLock lock1(lock_name);
+  }  // lock1 destroyed here, lock released
+
+  // Should not throw - lock was released by destructor
+  FileLock lock2(lock_name);
+
+  // Cleanup
+  unlink(lock_path.c_str());
+}
+
+TEST_CASE("test_file_lock_throws_if_locked") {
+  std::string lock_name = "test_lock_" + std::to_string(test_counter++);
+  std::string lock_path = "/dev/shm/" + lock_name;
+
+  // Create first lock (A) in a child process to ensure lock is held by different process
+  pid_t pid = fork();
+  if (pid == 0) {
+    // Child process: acquire lock and hold it
+    FileLock lock_a(lock_name);
+    // Sleep to keep lock held while parent tries to acquire
+    sleep(2);
+    _exit(0);
+  }
+
+  // Parent process: wait a moment for child to acquire lock
+  usleep(100000);  // 100ms
+
+  // Try to create second lock (B) - should throw because child holds it
+  bool caught_exception = false;
+  try {
+    FileLock lock_b(lock_name);
+    // Should not reach here
+    CHECK(false);
+  } catch (const std::runtime_error& e) {
+    caught_exception = true;
+    CHECK(e.what() != nullptr);
+  }
+
+  // Wait for child to finish
+  int status;
+  waitpid(pid, &status, 0);
+
+  CHECK(caught_exception);
+
+  // Cleanup
+  unlink(lock_path.c_str());
 }
