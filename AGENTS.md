@@ -281,6 +281,8 @@ opencode auth login
 # Then visit https://opencode.ai/auth to get your API key
 ```
 
+The current model ID in use is: `minimax-cn-coding-plan/MiniMax-M2.5`
+
 ### Configuration Files
 
 - `~/.config/opencode/opencode.json` - Main OpenCode config with plugins
