@@ -409,3 +409,216 @@ TEST_CASE("test_file_lock_throws_if_locked") {
   // Cleanup
   unlink(lock_path.c_str());
 }
+
+TEST_CASE("test_file_lock_manual_lock_unlock") {
+  std::string lock_name = "test_lock_manual_" + std::to_string(test_counter++);
+  std::string lock_path = "/dev/shm/" + lock_name;
+
+  FileLock lock(lock_name);
+
+  lock.Unlock();
+  lock.Lock();  // Should not throw
+
+  // Cleanup
+  unlink(lock_path.c_str());
+}
+
+TEST_CASE("test_publish_string_view_zero_copy") {
+  std::string shm_name = "test_shm_zc_" + std::to_string(test_counter++);
+  ShmCleanupFixture cleanup(shm_name);
+  
+  Publisher publisher(shm_name, 1024);
+  
+  std::string payload = "zero_copy_test";
+  std::string_view sv(payload);
+  FrameHeader header = publisher.Publish(sv);
+  
+  CHECK(header.payload_len == payload.size());
+  CHECK(header.frame_type == FrameHeader::Type::kMessage);
+}
+
+TEST_CASE("test_batch_commit_fence") {
+  std::string shm_name = "test_shm_fence_" + std::to_string(test_counter++);
+  ShmCleanupFixture cleanup(shm_name);
+  
+  Publisher publisher(shm_name, 1024);
+  Subscriber subscriber(shm_name);
+  
+  auto batch = publisher.CreateBatch();
+  batch.Add(std::span<const char>("msg1", 4));
+  batch.Add(std::span<const char>("msg2", 4));
+  batch.CommitFence();
+  
+  CHECK(batch.IsCommitted() == true);
+  
+  std::this_thread::sleep_for(std::chrono::microseconds(50));
+  auto result1 = subscriber.TryRead();
+  CHECK(result1.payload.size() == 4);
+}
+
+TEST_CASE("test_metrics_api") {
+  std::string shm_name = "test_shm_metrics_" + std::to_string(test_counter++);
+  ShmCleanupFixture cleanup(shm_name);
+  
+  Publisher publisher(shm_name, 1024);
+  Subscriber subscriber(shm_name);  // Create subscriber BEFORE publishing
+  
+  auto batch = publisher.CreateBatch();
+  batch.Add(std::span<const char>("test", 4));
+  batch.CommitFence();
+  
+  std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  
+  auto pub_stats = publisher.GetStats();
+  CHECK(pub_stats.messages_published > 0);
+  CHECK(pub_stats.publish_offset > 0);
+  
+  auto result = subscriber.TryRead();
+  
+  CHECK(result.header.frame_type == FrameHeader::Type::kMessage);
+  CHECK(result.payload.size() == 4);
+  
+  auto sub_stats = subscriber.GetStats();
+  CHECK(sub_stats.messages_read > 0);
+}
+
+TEST_CASE("test_multi_process_publisher_subscriber") {
+  std::string shm_name = "test_shm_mp_" + std::to_string(test_counter++);
+  ShmCleanupFixture cleanup(shm_name);
+  
+  {
+    Publisher init_pub(shm_name, 1024);
+  }
+  
+  pid_t pid = fork();
+  
+  if (pid == 0) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    Publisher publisher(shm_name, 1024);
+    for (int i = 0; i < 10; ++i) {
+      std::string msg = "msg_" + std::to_string(i);
+      (void)publisher.Publish(std::span<const char>(msg));
+    }
+    _exit(0);
+  }
+  
+  Subscriber subscriber(shm_name);
+  
+  int status;
+  waitpid(pid, &status, 0);
+  CHECK(WIFEXITED(status));
+  
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  
+  int read_count = 0;
+  for (int i = 0; i < 20; ++i) {
+    auto result = subscriber.TryRead();
+    if (result.header.frame_type == FrameHeader::Type::kMessage && !result.payload.empty()) {
+      read_count++;
+    }
+  }
+  CHECK(read_count == 10);
+}
+
+TEST_CASE("test_publisher_crash_recovery") {
+  std::string shm_name = "test_shm_recovery_" + std::to_string(test_counter++);
+  ShmCleanupFixture cleanup(shm_name);
+  
+  {
+    Publisher init_pub(shm_name, 1024);
+  }
+  
+  Subscriber subscriber(shm_name);
+  
+  {
+    Publisher publisher1(shm_name, 1024);
+    (void)publisher1.Publish(std::span<const char>("msg1", 4));
+    (void)publisher1.Publish(std::span<const char>("msg2", 4));
+  }
+  
+  Publisher publisher2(shm_name, 1024);
+  auto stats = publisher2.GetStats();
+  CHECK(stats.publish_offset > 0);
+  
+  (void)publisher2.Publish(std::span<const char>("msg3", 4));
+  
+  std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  
+  int count = 0;
+  for (int i = 0; i < 10; ++i) {
+    auto result = subscriber.TryRead();
+    if (result.header.frame_type == FrameHeader::Type::kMessage && !result.payload.empty()) {
+      count++;
+    }
+  }
+  CHECK(count == 3);
+}
+
+TEST_CASE("test_subscriber_crash_recovery") {
+  std::string shm_name = "test_shm_sub_recovery_" + std::to_string(test_counter++);
+  ShmCleanupFixture cleanup(shm_name);
+  
+  Publisher publisher(shm_name, 1024);
+  
+  Subscriber subscriber(shm_name);
+  
+  (void)publisher.Publish(std::span<const char>("msg1", 4));
+  std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  (void)subscriber.TryRead();
+  
+  (void)publisher.Publish(std::span<const char>("msg2", 4));
+  (void)publisher.Publish(std::span<const char>("msg3", 4));
+  
+  std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  
+  int count = 0;
+  for (int i = 0; i < 10; ++i) {
+    auto result = subscriber.TryRead();
+    if (result.header.frame_type == FrameHeader::Type::kMessage && !result.payload.empty()) {
+      count++;
+    }
+  }
+  CHECK(count == 2);
+}
+
+TEST_CASE("test_max_payload_size") {
+  std::string shm_name = "test_shm_max_" + std::to_string(test_counter++);
+  ShmCleanupFixture cleanup(shm_name);
+  
+  Publisher publisher(shm_name, 1024);
+  Subscriber subscriber(shm_name);
+  
+  std::string large_payload(500, 'x');
+  (void)publisher.Publish(std::span<const char>(large_payload));
+  
+  std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  auto result = subscriber.TryRead();
+  
+  CHECK(result.header.frame_type == FrameHeader::Type::kMessage);
+  CHECK(result.payload.size() == large_payload.size());
+}
+
+TEST_CASE("test_exact_capacity_boundary") {
+  std::string shm_name = "test_shm_boundary_" + std::to_string(test_counter++);
+  ShmCleanupFixture cleanup(shm_name);
+  
+  Publisher publisher(shm_name, 512);
+  Subscriber subscriber(shm_name);
+  
+  std::string msg1(100, 'a');
+  (void)publisher.Publish(std::span<const char>(msg1));
+  
+  std::string msg2(100, 'b');
+  (void)publisher.Publish(std::span<const char>(msg2));
+  
+  std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  
+  int count = 0;
+  for (int i = 0; i < 5; ++i) {
+    auto result = subscriber.TryRead();
+    if (result.header.frame_type == FrameHeader::Type::kMessage && !result.payload.empty()) {
+      count++;
+    }
+  }
+  CHECK(count == 2);
+}

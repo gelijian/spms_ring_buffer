@@ -219,3 +219,91 @@ class Subscriber {
 6.  **No Loop Guarantee**: `TryRead` must not contain internal `while` loops for skipping padding; it should process one frame (either Message or Padding) per call.
 7.  **Fault Recovery Test**: Demonstrate killing and restarting the publisher/subscriber without corrupting the ring buffer.
 8.  **Batch API**: The Publisher provides a Batch class for batching multiple frames with a single atomic write to publish_offset.
+
+---
+
+## 5. Extended Features
+
+### 5.1 Zero-Copy Publishing
+
+The library supports zero-copy publishing using `std::string_view`:
+
+```cpp
+// Zero-copy publishing (no data copy)
+std::string message = "Hello World";
+std::string_view sv(message);
+publisher.Publish(sv);
+
+// Span-based publishing (original)
+std::span<const char> span(message.data(), message.size());
+publisher.Publish(span);
+```
+
+### 5.2 Batch API with Memory Fence
+
+The Batch class supports two commit modes:
+
+```cpp
+auto batch = publisher.CreateBatch();
+batch.Add(payload1);
+batch.Add(payload2);
+
+// Commit with release semantics (default)
+batch.Commit();
+
+// Commit with full memory fence + release (guaranteed visibility)
+batch.CommitFence();
+```
+
+- `Commit()`: Uses `memory_order_release` - efficient for same-process subscribers
+- `CommitFence()`: Uses `std::atomic_thread_fence` before release - guarantees cross-process visibility
+
+### 5.3 Metrics API
+
+Both Publisher and Subscriber provide metrics:
+
+```cpp
+// Publisher metrics
+PublisherStats {
+  uint64_t messages_published;  // Total messages published
+  uint64_t publish_offset;      // Current write position
+};
+auto pub_stats = publisher.GetStats();
+
+// Subscriber metrics
+SubscriberStats {
+  uint64_t messages_read;       // Total messages read
+  uint64_t subscribe_offset;    // Current read position
+};
+auto sub_stats = subscriber.GetStats();
+```
+
+### 5.4 FileLock Manual Control
+
+FileLock provides manual lock/unlock for advanced use cases:
+
+```cpp
+FileLock lock("my_lock");
+lock.Unlock();  // Release lock temporarily
+// ... do something that doesn't need exclusive access ...
+lock.Lock();    // Re-acquire lock
+```
+
+---
+
+## 6. Testing
+
+The library includes comprehensive tests:
+
+- **Unit Tests**: Basic functionality, edge cases, boundary conditions
+- **Multi-Process Tests**: Cross-process publisher/subscriber communication
+- **Fault Recovery Tests**: Publisher/subscriber crash and restart scenarios
+- **Stress Tests**: High-frequency publishing
+
+Run tests:
+```bash
+./build/tests/spms_ring_buffer_test
+
+# Run specific test
+./build/tests/spms_ring_buffer_test --test-case="test_name"
+```

@@ -10,6 +10,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
 #include "file_lock.h"
 #include "shared_memory.h"
@@ -59,6 +60,16 @@ struct alignas(kCacheLineSize) SpmsRingBufferControlBlock {
   [[nodiscard]] static uint64_t ComputeRequiredSize(uint64_t data_capacity) {
     return (sizeof(SpmsRingBufferControlBlock) + data_capacity + kHugePageSize - 1) & ~(kHugePageSize - 1);
   }
+};
+
+struct PublisherStats {
+  uint64_t messages_published = 0;
+  uint64_t publish_offset = 0;
+};
+
+struct SubscriberStats {
+  uint64_t messages_read = 0;
+  uint64_t subscribe_offset = 0;
 };
 
 class OverrunException : public std::runtime_error {
@@ -115,6 +126,10 @@ class Publisher {
     return header;
   }
 
+  [[nodiscard]] FrameHeader Publish(std::string_view sv) {
+    return Publish(std::span<const char>{sv.data(), sv.size()});
+  }
+
   class Batch {
    public:
     [[nodiscard]] FrameHeader Add(std::span<const char> payload) {
@@ -141,11 +156,22 @@ class Publisher {
       header.frame_type = FrameHeader::Type::kMessage;
       WriteFrameInternal(header, payload);
       current_offset_ = header.OffsetEnd();
+      messages_count_++;
       return header;
     }
 
     void Commit() {
       if (!committed_) {
+        *messages_published_ += messages_count_;
+        control_block_->publish_offset.store(current_offset_, std::memory_order_release);
+        committed_ = true;
+      }
+    }
+
+    void CommitFence() {
+      if (!committed_) {
+        *messages_published_ += messages_count_;
+        std::atomic_thread_fence(std::memory_order_seq_cst);
         control_block_->publish_offset.store(current_offset_, std::memory_order_release);
         committed_ = true;
       }
@@ -160,7 +186,8 @@ class Publisher {
 
    private:
     explicit Batch(Publisher& publisher)
-        : control_block_(publisher.control_block_), data_start_(publisher.data_start_) {
+        : control_block_(publisher.control_block_), data_start_(publisher.data_start_),
+          messages_published_(&publisher.messages_published_) {
       start_offset_ = control_block_->publish_offset.load(std::memory_order_acquire);
       current_offset_ = start_offset_;
     }
@@ -185,16 +212,23 @@ class Publisher {
     char* data_start_;
     uint64_t start_offset_ = 0;
     uint64_t current_offset_ = 0;
+    uint64_t* messages_published_ = nullptr;
+    uint64_t messages_count_ = 0;
     bool committed_ = false;
   };
 
   [[nodiscard]] Batch CreateBatch() { return Batch(*this); }
+
+  [[nodiscard]] PublisherStats GetStats() const {
+    return {messages_published_, control_block_->publish_offset.load(std::memory_order_acquire)};
+  }
 
  private:
   SharedMemory shm_;
   SpmsRingBufferControlBlock* control_block_;
   char* data_start_;
   FileLock lock_;
+  uint64_t messages_published_ = 0;
 };
 
 class Subscriber {
@@ -243,6 +277,7 @@ class Subscriber {
     if (frame_header.frame_type == FrameHeader::Type::kPadding) {
       return {frame_header, {}};
     }
+    messages_read_++;
     char* payload_ptr = data_ptr + sizeof(FrameHeader);
     return {frame_header, {payload_ptr, static_cast<size_t>(frame_header.payload_len)}};
   }
@@ -251,12 +286,17 @@ class Subscriber {
     return data_start_ + control_block_->PhysicalOffset(offset);
   }
 
+  [[nodiscard]] SubscriberStats GetStats() const {
+    return {messages_read_, subscribe_offset_};
+  }
+
  private:
   SharedMemory shm_;
   SpmsRingBufferControlBlock* control_block_;
   char* data_start_;
   uint64_t subscribe_offset_ = 0;
   uint64_t cache_publish_offset_ = 0;
+  uint64_t messages_read_ = 0;
 };
 
 }  // namespace spms_ring_buffer
