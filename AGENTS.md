@@ -87,7 +87,7 @@ See `docs/plans/2026-03-05-refactor-comprehensive.md` for the comprehensive refa
 
 - `Publisher`: Create shared memory, publish messages with `Publish()` or `Batch`
 - `Subscriber`: Attach to existing shared memory, read with `TryRead()`
-- `Batch`: Efficient bulk publishing - `CreateBatch()` → `Add()` → `Commit()` or `CommitFence()`
+- `Batch`: Efficient bulk publishing - `CreateBatch()` → `Add()` → `Commit()`
 
 ---
 
@@ -109,7 +109,6 @@ auto batch = publisher.CreateBatch();
 batch.Add(payload1);
 batch.Add(payload2);
 batch.Commit();           // Release semantics
-batch.CommitFence();      // Full memory fence + release
 ```
 
 ### Metrics

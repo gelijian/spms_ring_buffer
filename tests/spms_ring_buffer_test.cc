@@ -437,25 +437,6 @@ TEST_CASE("test_publish_string_view_zero_copy") {
   CHECK(header.frame_type == FrameHeader::Type::kMessage);
 }
 
-TEST_CASE("test_batch_commit_fence") {
-  std::string shm_name = "test_shm_fence_" + std::to_string(test_counter++);
-  ShmCleanupFixture cleanup(shm_name);
-  
-  Publisher publisher(shm_name, 1024);
-  Subscriber subscriber(shm_name);
-  
-  auto batch = publisher.CreateBatch();
-  batch.Add(std::span<const char>("msg1", 4));
-  batch.Add(std::span<const char>("msg2", 4));
-  batch.CommitFence();
-  
-  CHECK(batch.IsCommitted() == true);
-  
-  std::this_thread::sleep_for(std::chrono::microseconds(50));
-  auto result1 = subscriber.TryRead();
-  CHECK(result1.payload.size() == 4);
-}
-
 TEST_CASE("test_metrics_api") {
   std::string shm_name = "test_shm_metrics_" + std::to_string(test_counter++);
   ShmCleanupFixture cleanup(shm_name);
@@ -465,7 +446,7 @@ TEST_CASE("test_metrics_api") {
   
   auto batch = publisher.CreateBatch();
   batch.Add(std::span<const char>("test", 4));
-  batch.CommitFence();
+  batch.Commit();
   
   std::this_thread::sleep_for(std::chrono::milliseconds(10));
   

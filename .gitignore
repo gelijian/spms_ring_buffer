@@ -19,3 +19,7 @@ CMakeLists.txt.user
 # Shared memory (runtime created)
 /dev/shm/*
 *.lock
+
+# Tooling artifacts
+.sisyphus/
+CMakeUserPresets.json

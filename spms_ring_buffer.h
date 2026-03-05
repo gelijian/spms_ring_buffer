@@ -168,15 +168,6 @@ class Publisher {
       }
     }
 
-    void CommitFence() {
-      if (!committed_) {
-        *messages_published_ += messages_count_;
-        std::atomic_thread_fence(std::memory_order_seq_cst);
-        control_block_->publish_offset.store(current_offset_, std::memory_order_release);
-        committed_ = true;
-      }
-    }
-
     [[nodiscard]] bool IsCommitted() const { return committed_; }
 
     Batch(Batch&&) noexcept = default;

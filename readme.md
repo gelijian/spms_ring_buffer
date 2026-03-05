@@ -248,15 +248,11 @@ auto batch = publisher.CreateBatch();
 batch.Add(payload1);
 batch.Add(payload2);
 
-// Commit with release semantics (default)
+// Commit with release semantics
 batch.Commit();
-
-// Commit with full memory fence + release (guaranteed visibility)
-batch.CommitFence();
 ```
 
-- `Commit()`: Uses `memory_order_release` - efficient for same-process subscribers
-- `CommitFence()`: Uses `std::atomic_thread_fence` before release - guarantees cross-process visibility
+- `Commit()`: Uses `memory_order_release` - sufficient on x86-64 (strong memory model)
 
 ### 5.3 Metrics API
 
